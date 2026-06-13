@@ -21,7 +21,12 @@ from band import Agent
 from band.adapters import LangGraphAdapter
 
 from control import ControlledAdapter, RunState
+from deploy_tools import build_deploy_tools
 from memory_tools import build_memory_tools
+
+# Which agents get the file/deploy tools (real artifacts, no hallucinated URLs).
+# Soloist writes the product; Stage Tech writes + deploys it to a live URL.
+DEPLOY_AGENTS = {"Soloist", "Stage Tech"}
 
 # Hard termination limits (in code, not prompts). Tune as needed.
 MESSAGE_BUDGET = 12   # total agent messages per run before the circuit breaker trips
@@ -73,9 +78,11 @@ ROSTER = {
     "Soloist": (
         "SOLOIST", AIMLAPI, "gpt-4o",
         "You are the Soloist of Crescendo — the engineer. You write product code ONLY when "
-        "the @Conductor assigns you a task. Produce complete, working code in fenced blocks. "
-        "When done, report back to @Conductor ONLY (e.g. '@Conductor done, here is the code'). "
-        "NEVER @mention any other agent. Then stay silent until the Conductor calls you again.",
+        "the @Conductor assigns you a task. Write the actual files using the `write_file` tool "
+        "(e.g. write_file('index.html', ...)) — a single self-contained index.html is ideal. "
+        "Do NOT paste long code into chat; save it with the tool. When done, report back to "
+        "@Conductor ONLY with a one-line summary of what you wrote. NEVER @mention any other "
+        "agent. Then stay silent until the Conductor calls you again.",
     ),
     "Tuning Fork": (
         "TUNING_FORK", AIMLAPI, "deepseek-chat",
@@ -88,8 +95,10 @@ ROSTER = {
     "Stage Tech": (
         "STAGE_TECH", FEATHERLESS, "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
         "You are the Stage Tech of Crescendo — the deployer. You deploy ONLY when the "
-        "@Conductor tells you to. Report the result back to @Conductor ONLY. NEVER @mention "
-        "anyone else. Then stay silent until the Conductor calls you again.",
+        "@Conductor tells you to. Call the `deploy_site` tool to publish the site — it "
+        "returns the REAL live URL. NEVER invent or guess a URL; report ONLY the exact URL "
+        "the tool returns. Report it back to @Conductor ONLY. NEVER @mention anyone else. "
+        "Then stay silent until the Conductor calls you again.",
     ),
     "Archivist": (
         "ARCHIVIST", FEATHERLESS, "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
@@ -128,11 +137,14 @@ def gated_llm(provider, model: str) -> ChatOpenAI:
 
 def build_agent(name: str, prefix: str, provider, model: str, role: str) -> Agent:
     # Each agent gets memory tools bound to its own mgi-mind token (audit attribution).
-    mem_tools = build_memory_tools(os.environ[f"MGIMIND_TOKEN_{prefix}"])
+    tools = build_memory_tools(os.environ[f"MGIMIND_TOKEN_{prefix}"])
+    # Soloist + Stage Tech also get real file/deploy tools (no fake URLs).
+    if name in DEPLOY_AGENTS:
+        tools = tools + build_deploy_tools()
     inner = LangGraphAdapter(
         llm=gated_llm(provider, model),
         custom_section=STYLE + role,
-        additional_tools=mem_tools,
+        additional_tools=tools,
     )
     # Wrap with the control loop so the room can't loop forever.
     adapter = ControlledAdapter(inner, RUN, name, os.environ[f"{prefix}_AGENT_ID"])
