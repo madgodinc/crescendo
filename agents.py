@@ -43,7 +43,7 @@ class AutoReplyLangGraphAdapter(LangGraphAdapter):
         except Exception as e:
             logging.getLogger("agents").warning("auto-reply failed: %s", e)
 
-from deploy_tools import build_deploy_tools, build_file_tools
+from deploy_tools import build_author_tools, build_deploy_tools, build_review_tools
 from memory_tools import build_memory_tools
 
 
@@ -99,13 +99,16 @@ ROSTER = {
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
     "Soloist": ("SOLOIST", AIMLAPI, "gpt-4o",
-        REPLY_RULE + "You are the Soloist — the engineer. Write the product to files with the "
-        "write_file tool (a single self-contained index.html is ideal). Do NOT paste code in "
-        "chat. Reply with a one-line summary of what file(s) you wrote."),
+        REPLY_RULE + "You are the Soloist — the engineer. Build the page with the write_page "
+        "tool: pass title, body (markup INSIDE <body> only — NO <html>/<head>/<body>/<script>/"
+        "<style> tags), css (rules only), js (code only). The HTML shell is fixed for you. Do "
+        "NOT add a favicon or base64. Do NOT paste code in chat. Reply with a one-line summary."),
     "Tuning Fork": ("TUNING_FORK", AIMLAPI, "deepseek-chat",
-        REPLY_RULE + "You are the Tuning Fork — the critic. Use list_files and read_file to "
-        "read the Soloist's code from the workspace yourself — never expect it pasted in chat. "
-        "Review it, then reply 'CLEAN' if good, or 'ISSUES: ...' listing concrete fixes."),
+        REPLY_RULE + "You are the Tuning Fork — the critic. Use list_files then read_file to read "
+        "the Soloist's code yourself — never expect it in chat. CHECK FIRST that the file is "
+        "complete and not truncated (must end with </html>); if truncated or empty, that's an "
+        "ISSUE. Then review correctness. Reply 'CLEAN' only if the file is whole and works, else "
+        "'ISSUES: ...' with concrete fixes."),
     "Stage Tech": ("STAGE_TECH", AIMLAPI, "deepseek-chat",
         REPLY_RULE + "You are the Stage Tech — the deployer. Call deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
@@ -118,14 +121,14 @@ ROSTER = {
 def build(prefix, provider, model, role) -> Agent:
     base_url, api_key = provider
     llm = ChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                     temperature=0, max_tokens=1024)
+                     temperature=0, max_tokens=8192)
     tools = build_memory_tools(os.environ[f"MGIMIND_TOKEN_{prefix}"])
     if prefix == "STAGE_TECH":
-        tools = tools + build_deploy_tools()          # files + deploy
+        tools = tools + build_deploy_tools()          # read + deploy (with validate gate)
     elif prefix == "SOLOIST":
-        tools = tools + build_file_tools()            # write/read/list files
+        tools = tools + build_author_tools()          # write_page (fixed shell) + read
     elif prefix == "TUNING_FORK":
-        tools = tools + build_file_tools()            # read files to review
+        tools = tools + build_review_tools()          # read files to review
     inner = AutoReplyLangGraphAdapter(llm=llm, custom_section=role, additional_tools=tools)
     gated = GatedAdapter(inner, os.environ[f"{prefix}_AGENT_ID"])
     return Agent.create(

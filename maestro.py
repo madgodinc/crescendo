@@ -186,7 +186,7 @@ class Maestro:
         result["plan"] = plan
 
         # PHASE 2/3 — code <-> review negotiation
-        code_task = f"Implement this brief: {brief}\nUse write_file to save a single self-contained index.html. Reply with a one-line summary."
+        code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
         verdict = ""
         for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
             log("phase", f"code round {rnd}")
@@ -200,12 +200,23 @@ class Maestro:
             if "CLEAN" in review.upper() or "ISSUE" not in review.upper():
                 verdict = "clean"
                 break
-            code_task = f"The reviewer found issues: {review}\nFix them with write_file and reply with a one-line summary."
+            code_task = f"The reviewer found issues: {review}\nFix them with write_page and reply with a one-line summary."
         result["review_verdict"] = verdict or "max rounds reached"
 
-        # PHASE 4 — deploy
+        # PHASE 4 — deploy. If the deploy gate refuses (invalid/truncated page),
+        # bounce back to the Soloist to rebuild, then retry — don't ship junk.
         deploy = await self.ask("stagetech",
             "The work passed review. Call deploy_site and reply with the exact live URL it returns.")
+        for _ in range(2):
+            if "pages.dev" in deploy:
+                break
+            log("phase", "deploy refused/failed — back to Soloist")
+            await self.ask("soloist",
+                f"Deploy was refused — the page is invalid or truncated: {deploy}\n"
+                f"Rebuild a COMPLETE page for the brief '{brief}' with write_page. "
+                f"No favicon, no base64.")
+            deploy = await self.ask("stagetech",
+                "Call deploy_site again and reply with the exact live URL.")
         result["deploy"] = deploy
 
         # PHASE 5 — archive
