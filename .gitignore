@@ -25,3 +25,6 @@ replay/*.json
 # OS
 .DS_Store
 *HACKATHON-KEYS*
+
+# wrangler local cache
+.wrangler/
