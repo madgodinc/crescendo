@@ -18,7 +18,32 @@ from band import Agent
 from band.adapters import LangGraphAdapter
 from band.core import SimpleAdapter
 
-from deploy_tools import build_deploy_tools
+
+class AutoReplyLangGraphAdapter(LangGraphAdapter):
+    """Guarantee the LLM's final text reaches the chat, even when the model
+    forgot to call band_send_message. Idempotent: skips if the model used tools."""
+
+    async def _handle_stream_event(self, event, room_id, tools) -> None:
+        await super()._handle_stream_event(event, room_id, tools)
+        if not isinstance(event, dict) or event.get("event") != "on_chat_model_end":
+            return
+        output = (event.get("data") or {}).get("output")
+        if getattr(output, "tool_calls", None):
+            return  # model already replied via a tool — no double-post
+        text = getattr(output, "content", "") or ""
+        if isinstance(text, list):
+            text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+        text = (text or "").strip()
+        if not text:
+            return
+        # reply to Maestro (Band needs >=1 mention; the orchestrator is the addressee)
+        try:
+            await tools.send_message(content=text,
+                                     mentions=[os.environ["MAESTRO_AGENT_ID"]])
+        except Exception as e:
+            logging.getLogger("agents").warning("auto-reply failed: %s", e)
+
+from deploy_tools import build_deploy_tools, build_file_tools
 from memory_tools import build_memory_tools
 
 
@@ -35,9 +60,13 @@ class GatedAdapter(SimpleAdapter):
         msg = getattr(inp, "msg", None)
         sender = getattr(msg, "sender_id", "")
         content = (getattr(msg, "content", "") or "")
+        # 1. never react to our own messages (kills self-reply loops)
+        if sender == self._uuid:
+            return
+        # 2. only act on a direct task from Maestro that mentions us
         addressed = self._uuid in content  # Band encodes mentions as @[[uuid]]
         if sender != os.environ["MAESTRO_AGENT_ID"] or not addressed:
-            return  # ignore anything not a direct task from Maestro
+            return
         await self._inner.on_event(inp)
 
     async def on_message(self, *a, **k):
@@ -70,12 +99,13 @@ ROSTER = {
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
     "Soloist": ("SOLOIST", AIMLAPI, "gpt-4o",
-        REPLY_RULE + "You are the Soloist — the engineer. Write the product with the "
-        "write_file tool (a single self-contained index.html is ideal), then reply with a "
-        "one-line summary of what you wrote."),
+        REPLY_RULE + "You are the Soloist — the engineer. Write the product to files with the "
+        "write_file tool (a single self-contained index.html is ideal). Do NOT paste code in "
+        "chat. Reply with a one-line summary of what file(s) you wrote."),
     "Tuning Fork": ("TUNING_FORK", AIMLAPI, "deepseek-chat",
-        REPLY_RULE + "You are the Tuning Fork — the critic. Review the work. Reply 'CLEAN' "
-        "if good, or 'ISSUES: ...' listing concrete fixes."),
+        REPLY_RULE + "You are the Tuning Fork — the critic. Use list_files and read_file to "
+        "read the Soloist's code from the workspace yourself — never expect it pasted in chat. "
+        "Review it, then reply 'CLEAN' if good, or 'ISSUES: ...' listing concrete fixes."),
     "Stage Tech": ("STAGE_TECH", AIMLAPI, "deepseek-chat",
         REPLY_RULE + "You are the Stage Tech — the deployer. Call deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
@@ -88,11 +118,15 @@ ROSTER = {
 def build(prefix, provider, model, role) -> Agent:
     base_url, api_key = provider
     llm = ChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                     temperature=0.3, max_tokens=1024)
+                     temperature=0, max_tokens=1024)
     tools = build_memory_tools(os.environ[f"MGIMIND_TOKEN_{prefix}"])
-    if prefix in ("SOLOIST", "STAGE_TECH"):
-        tools = tools + build_deploy_tools()
-    inner = LangGraphAdapter(llm=llm, custom_section=role, additional_tools=tools)
+    if prefix == "STAGE_TECH":
+        tools = tools + build_deploy_tools()          # files + deploy
+    elif prefix == "SOLOIST":
+        tools = tools + build_file_tools()            # write/read/list files
+    elif prefix == "TUNING_FORK":
+        tools = tools + build_file_tools()            # read files to review
+    inner = AutoReplyLangGraphAdapter(llm=llm, custom_section=role, additional_tools=tools)
     gated = GatedAdapter(inner, os.environ[f"{prefix}_AGENT_ID"])
     return Agent.create(
         adapter=gated,

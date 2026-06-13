@@ -13,6 +13,7 @@ Run: uv run python maestro.py "your brief here"
 
 import asyncio
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -50,16 +51,6 @@ class Maestro:
         self.rc = AsyncRestClient(api_key=os.environ["MAESTRO_API_KEY"], base_url=REST)
         self.room = None
         self.seen_ids: set[str] = set()
-
-    async def open_room(self) -> str:
-        room = await self.rc.agent_api_chats.create_agent_chat(chat=ChatRoomRequest())
-        self.room = room.data.id
-        log("setup", f"room {self.room}")
-        for key, (uuid, handle) in WORKERS.items():
-            await self.rc.agent_api_participants.add_agent_chat_participant(
-                self.room, participant=ParticipantRequest(participant_id=uuid, role="member"))
-            log("setup", f"added {key}")
-        return self.room
 
     async def say(self, to_key: str, text: str) -> datetime:
         """Post a message @mentioning one worker. Returns the send timestamp."""
@@ -123,8 +114,69 @@ class Maestro:
                 else:
                     raise
 
-    async def run(self, brief: str) -> dict:
-        await self.open_room()
+    def _read_site(self) -> str:
+        """Read the product file the Soloist wrote, so the reviewer sees real code."""
+        path = "/home/madgodinc/code/crescendo/workspace/site/index.html"
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return "(no file written yet)"
+
+    async def _room_messages(self, room_id: str) -> list:
+        out, page = [], 1
+        while True:
+            lst = await self.rc.agent_api_messages.list_agent_messages(
+                room_id, status="all", page=page, page_size=100)
+            data = getattr(lst, "data", None) or []
+            out.extend(data)
+            meta = getattr(lst, "metadata", None)
+            total = getattr(meta, "total_pages", 1) or 1
+            if page >= total or not data:
+                break
+            page += 1
+        return out
+
+    async def listen_command_room(self, command_room: str) -> None:
+        """Watch the command room; for each human brief, run a project and report back."""
+        # Mark everything already there as seen, so we only react to NEW briefs.
+        seen = {m.id for m in await self._room_messages(command_room)}
+        log("ready", f"listening on command room {command_room} — drop a brief there")
+        while True:
+            for m in await self._room_messages(command_room):
+                if m.id in seen:
+                    continue
+                seen.add(m.id)
+                if m.sender_type == "User" and (m.content or "").strip():
+                    # strip the @[[uuid]] mention Band forces on every message
+                    brief = re.sub(r"@\[\[[^\]]+\]\]", "", m.content).strip()
+                    if not brief:
+                        continue
+                    log("brief", f"got: {brief[:80]}")
+                    # Band requires >=1 mention and forbids mentioning self; tag the
+                    # human who sent the brief so the report lands as a reply to them.
+                    self_m = [Mention(id=m.sender_id, handle=getattr(m, "sender_name", None) or "user")]
+                    try:
+                        result = await self.run(brief, room=command_room)
+                        await self.rc.agent_api_messages.create_agent_chat_message(
+                            command_room,
+                            message=ChatMessageRequest(
+                                content=f"✅ Готово: {result.get('deploy', '')}",
+                                mentions=self_m))
+                    except Exception as e:
+                        await self.rc.agent_api_messages.create_agent_chat_message(
+                            command_room,
+                            message=ChatMessageRequest(content=f"⚠️ Сбой: {type(e).__name__}: {e}", mentions=self_m))
+                        log("error", f"{type(e).__name__}: {e}")
+                    # after a run, ignore everything up to now so we wait for the NEXT brief
+                    seen = {x.id for x in await self._room_messages(command_room)}
+            await asyncio.sleep(POLL_INTERVAL)
+
+    async def run(self, brief: str, room: str = "") -> dict:
+        # Everything runs in ONE chat (the command room) — no per-project rooms.
+        self.room = room or self.room
+        # baseline: ignore all prior messages so we only read THIS run's replies
+        self.seen_ids = {m.id for m in await self._room_messages(self.room)}
         result = {"room": self.room, "brief": brief}
 
         # PHASE 1 — plan
@@ -139,9 +191,11 @@ class Maestro:
         for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
             log("phase", f"code round {rnd}")
             code_summary = await self.ask("soloist", code_task)
+            # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
             review = await self.ask("tuningfork",
-                f"Review the Soloist's latest work for the brief: {brief}\n"
-                f"Soloist says: {code_summary}\nReply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.")
+                f"The Soloist finished work for the brief: {brief}\n"
+                f"Read the workspace files yourself and review. "
+                f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.")
             result[f"review_{rnd}"] = review
             if "CLEAN" in review.upper() or "ISSUE" not in review.upper():
                 verdict = "clean"
@@ -164,16 +218,22 @@ class Maestro:
 
 
 async def main() -> None:
-    brief = sys.argv[1] if len(sys.argv) > 1 else "Make a simple web page with a click counter button."
     m = Maestro()
-    try:
-        result = await m.run(brief)
+    command_room = os.environ.get("MAESTRO_COMMAND_ROOM", "").strip()
+
+    # One-shot mode: a brief on the command line runs once in the command room and exits.
+    if len(sys.argv) > 1:
+        result = await m.run(sys.argv[1], room=command_room)
         print("\n=== RUN RESULT ===")
         for k, v in result.items():
             print(f"{k}: {str(v)[:120]}")
-    except Exception as e:
-        log("error", f"{type(e).__name__}: {e}")
-        raise
+        return
+
+    # Service mode: listen on the command room and handle every brief dropped there.
+    if not command_room:
+        log("error", "set MAESTRO_COMMAND_ROOM in .env, or pass a brief as an argument")
+        return
+    await m.listen_command_room(command_room)
 
 
 if __name__ == "__main__":

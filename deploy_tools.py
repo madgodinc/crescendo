@@ -40,6 +40,30 @@ async def _write_file(path: str, content: str) -> str:
     return f"wrote {path} ({len(content)} bytes)"
 
 
+class ReadArgs(BaseModel):
+    path: str = Field(description="Relative file path to read, e.g. 'index.html'.")
+
+
+async def _read_file(path: str) -> str:
+    full = _safe_path(path)
+    try:
+        with open(full, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"ERROR: {path} not found"
+
+
+async def _list_files() -> str:
+    if not os.path.isdir(WORKSPACE):
+        return "(empty)"
+    files = []
+    for root, _, names in os.walk(WORKSPACE):
+        for n in names:
+            rel = os.path.relpath(os.path.join(root, n), WORKSPACE)
+            files.append(rel)
+    return "\n".join(sorted(files)) or "(empty)"
+
+
 async def _deploy_site() -> str:
     if not os.path.isdir(WORKSPACE) or not os.listdir(WORKSPACE):
         return "ERROR: nothing to deploy — write files first."
@@ -57,14 +81,26 @@ async def _deploy_site() -> str:
     return f"deploy finished but no URL parsed:\n{text[-400:]}"
 
 
-def build_deploy_tools() -> list[StructuredTool]:
+def build_file_tools() -> list[StructuredTool]:
+    """read/write/list over the workspace — code lives in files, not in chat."""
     return [
         StructuredTool.from_function(
             coroutine=_write_file, name="write_file",
-            description="Write a file of the product into the site workspace. "
-                        "Use this to save the HTML/CSS/JS the Soloist produces.",
-            args_schema=WriteArgs,
-        ),
+            description="Write a product file into the site workspace (e.g. index.html).",
+            args_schema=WriteArgs),
+        StructuredTool.from_function(
+            coroutine=_read_file, name="read_file",
+            description="Read a file from the site workspace — use this to review code "
+                        "instead of expecting it pasted in chat.",
+            args_schema=ReadArgs),
+        StructuredTool.from_function(
+            coroutine=_list_files, name="list_files",
+            description="List all files currently in the site workspace."),
+    ]
+
+
+def build_deploy_tools() -> list[StructuredTool]:
+    return build_file_tools() + [
         StructuredTool.from_function(
             coroutine=_deploy_site, name="deploy_site",
             description="Deploy the site workspace to Cloudflare Pages and return the "
