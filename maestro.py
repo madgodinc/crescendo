@@ -25,7 +25,12 @@ from thenvoi_rest.types.chat_message_request import ChatMessageRequest
 from thenvoi_rest.types.chat_message_request_mentions_item import ChatMessageRequestMentionsItem as Mention
 from thenvoi_rest.types.participant_request import ParticipantRequest
 
-from memory_tools import fetch_skills
+from memory_tools import (
+    fetch_skills,
+    recall_playbook,
+    learn_playbook,
+    summarize_playbooks,
+)
 
 load_dotenv("/home/madgodinc/code/crescendo/.env")
 
@@ -61,6 +66,20 @@ def log(phase: str, msg: str) -> None:
 def _clean(text: str) -> str:
     """Strip Band's @[[uuid]] mention tokens for readable replay text."""
     return re.sub(r"@\[\[[^\]]+\]\]", "", text or "").strip()
+
+
+def _deploy_error_signature(deploy_reply: str) -> str:
+    """Reduce a deploy-gate refusal to a stable signature so procedural memory
+    recalls the same playbook across runs (the brief and URL differ every time;
+    the failure CLASS does not)."""
+    low = (deploy_reply or "").lower()
+    if "base64" in low or "favicon" in low or "icon" in low:
+        return "deploy gate refused: base64/favicon junk in page"
+    if "truncat" in low or "incomplete" in low or "</html>" in low:
+        return "deploy gate refused: page truncated / not valid HTML"
+    if "empty" in low or "blank" in low or "no file" in low:
+        return "deploy gate refused: page empty / no file written"
+    return "deploy gate refused: page failed validation"
 
 
 class Maestro:
@@ -252,18 +271,58 @@ class Maestro:
 
         # PHASE 4 — deploy. If the deploy gate refuses (invalid/truncated page),
         # bounce back to the Soloist to rebuild, then retry — don't ship junk.
+        # SELF-LEARNING LOOP: on a refusal we (1) reduce it to a stable signature,
+        # (2) RECALL whether memory already solved this class of failure and feed
+        # that fix to the Soloist, (3) on a successful rebuild LEARN the fix back
+        # as a verified procedure. Next run recalls it instead of re-grinding.
         deploy = await self.ask("stagetech",
             "The work passed review. Call deploy_site and reply with the exact live URL it returns.")
         for _ in range(2):
             if "pages.dev" in deploy:
                 break
-            log("phase", "deploy refused/failed — back to Soloist")
+            sig = _deploy_error_signature(deploy)
+            log("phase", f"deploy refused — {sig}")
+
+            # (1) recall a known fix for this failure class. Keep only playbooks
+            # whose stored error is actually about deploying — semantic recall can
+            # drag in unrelated high-trust procedures, and a wrong "known fix"
+            # is worse than none.
+            playbooks = await recall_playbook(ARCHIVIST_TOKEN, error=sig, context=brief)
+            playbooks = [p for p in playbooks
+                         if "deploy" in (p.get("error", "") + p.get("context", "")).lower()]
+            known = summarize_playbooks(playbooks)
+            if known:
+                log("learn", f"recalled {len(playbooks)} playbook(s) for this failure")
+                self.record("archivist", "recall",
+                            f"recalled {len(playbooks)} fix(es) for: {sig}",
+                            {"error": sig, "count": len(playbooks)})
+            else:
+                self.record("archivist", "recall",
+                            f"no playbook yet for: {sig} — orchestra will discover one",
+                            {"error": sig, "count": 0})
+
+            fix_hint = f"\nKnown fix from past runs: {known}" if known else ""
             await self.ask("soloist",
-                f"Deploy was refused — the page is invalid or truncated: {deploy}\n"
+                f"Deploy was refused — {sig}: {deploy}{fix_hint}\n"
                 f"Rebuild a COMPLETE page for the brief '{brief}' with write_page. "
                 f"No favicon, no base64.")
             deploy = await self.ask("stagetech",
                 "Call deploy_site again and reply with the exact live URL.")
+
+            # (3) the rebuild passing the gate IS the deterministic signal → learn it verified
+            if "pages.dev" in deploy:
+                fix = ("Rebuild the page with write_page (fixed HTML shell, slots only); "
+                       "strip base64/favicon/icon links; ensure the page is complete "
+                       "and ends in </html> before deploy.")
+                ok = await learn_playbook(ARCHIVIST_TOKEN, error=sig, fix=fix,
+                                          context=f"crescendo deploy: {brief}",
+                                          provenance="crescendo/maestro.py deploy gate",
+                                          verified=True)
+                if ok:
+                    log("learn", "stored verified deploy fix to procedural memory")
+                    self.record("archivist", "learn",
+                                f"learned verified fix for: {sig}",
+                                {"error": sig, "verified": True})
         result["deploy"] = deploy
         url = _clean(deploy)
         self.record("stagetech", "deploy", url,

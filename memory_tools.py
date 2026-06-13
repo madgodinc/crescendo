@@ -8,6 +8,7 @@ build_memory_tools(token) -> [remember, recall]
 """
 
 import os
+import re
 
 import httpx
 from langchain_core.tools import StructuredTool
@@ -15,6 +16,101 @@ from pydantic import BaseModel, Field
 
 MGIMIND_URL = os.environ.get("MGIMIND_URL", "http://127.0.0.1:8765")
 LIBRARY = os.environ.get("MGIMIND_LIBRARY", "crescendo")
+
+
+async def recall_playbook(token: str, error: str, context: str = "", limit: int = 3) -> list[dict]:
+    """Recall error->fix playbooks for a failure, newest-verified first.
+
+    This is the self-learning loop's READ side: before re-grinding a known
+    failure, the orchestra asks memory whether it has solved this before. The
+    HTTP layer maps a bare `query` onto `context`; we send both fields so the
+    lexical error match and the semantic context match both fire.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body: dict = {"error": error, "limit": limit}
+    if context:
+        body["context"] = context
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{MGIMIND_URL}/procedure/recall", headers=headers, json=body)
+            r.raise_for_status()
+            data = r.json()
+    except Exception:
+        return []
+    # Newer versions may return structured rows; honor those first.
+    if isinstance(data, dict) and (data.get("results") or data.get("procedures")):
+        return data.get("results") or data.get("procedures")
+    if isinstance(data, list):
+        return data
+    # The HTTP layer otherwise returns a human-formatted string under "result".
+    # Parse each block ([... verified] id: ... / error: / fix: / when:) into a dict.
+    text = data.get("result", "") if isinstance(data, dict) else ""
+    return _parse_recall_text(text)
+
+
+def _parse_recall_text(text: str) -> list[dict]:
+    """Parse the CLI-formatted procedure dump into structured playbook dicts."""
+    out: list[dict] = []
+    cur: dict | None = None
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        m = re.match(r"\[(.+?)\].*\bid:\s*(\S+)", line)
+        if m:
+            if cur:
+                out.append(cur)
+            cur = {"id": m.group(2), "verified": "verified" in m.group(1).lower(),
+                   "error": "", "fix": "", "context": ""}
+            continue
+        if cur is None:
+            continue
+        if line.startswith("error:"):
+            cur["error"] = line[len("error:"):].strip()
+        elif line.startswith("fix:"):
+            cur["fix"] = line[len("fix:"):].strip()
+        elif line.startswith("when:"):
+            cur["context"] = line[len("when:"):].strip()
+    if cur:
+        out.append(cur)
+    return [p for p in out if p.get("fix")]
+
+
+async def learn_playbook(token: str, error: str, fix: str, context: str = "",
+                         provenance: str = "", verified: bool = False) -> bool:
+    """Write an error->fix playbook back to procedural memory (the WRITE side).
+
+    `verified=True` only when a deterministic signal confirmed the fix worked
+    (here: the deploy gate accepted the rebuilt page). Unverified lessons are
+    stored with low weight and surface quietly until a later run confirms them.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {"error": error, "fix": fix, "verified": verified}
+    if context:
+        body["context"] = context
+    if provenance:
+        body["provenance"] = provenance
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{MGIMIND_URL}/procedure/learn", headers=headers, json=body)
+            r.raise_for_status()
+            return True
+    except Exception:
+        return False
+
+
+def summarize_playbooks(playbooks: list[dict]) -> str:
+    """Render recalled playbooks as a compact 'apply this known fix' block."""
+    lines = []
+    for p in playbooks:
+        fix = (p.get("fix") or "").strip()
+        if not fix:
+            continue
+        ctx = (p.get("context") or p.get("error") or "").strip()
+        tag = " (verified)" if p.get("verified") else ""
+        lines.append(f"- {fix}{tag}" + (f"  [{ctx[:60]}]" if ctx else ""))
+    if not lines:
+        return ""
+    return ("Known fixes for this kind of failure (apply directly, don't "
+            "rediscover):\n" + "\n".join(lines))
 
 
 async def fetch_skills(token: str, query: str, libraries: list[str], per_lib: int = 3) -> str:
