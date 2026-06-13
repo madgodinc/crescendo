@@ -41,10 +41,30 @@ same class of problem appears, the fix is recalled instead of rediscovered. The
 Archivist pulls only the *relevant* context for each step instead of carrying the
 full window — fewer tokens, longer sessions, bigger projects.
 
-## Status
+## How coordination works
 
-Day 1 of the build phase. Scaffolding in progress. This README will track what
-actually ships.
+Crescendo runs as a star. Every agent reports back to the Conductor and waits until
+the Conductor hands it the turn. The Conductor holds the plan, picks the next step,
+caps review rounds, and calls the work done. Most multi-agent demos die when two
+agents ping-pong forever; the star prevents that, because nobody speaks out of turn.
+
+A control loop in code backs up the prompts. It ignores system events, lets an agent
+act only when something @mentions it, and stops a run that goes too long. The
+Conductor's judgement does the work. The breaker is the seatbelt.
+
+## Memory and the audit trail
+
+Agents share one memory ([mgi-mind](https://github.com/madgodinc/mgi-mind)) over HTTP.
+Each agent writes with its own token, so every entry carries its author. The dashboard
+reads that audit trail, so you can replay who decided what and when.
+
+## What's built
+
+- Five agents on Band, each with its own LLM brain (Featherless and AI/ML API)
+- Star coordination with a control loop in code
+- Shared memory, every write attributed to its agent
+- The Stage Tech deploys to a live Cloudflare Pages URL and reports the real link
+- A dashboard for the orchestra graph and the decision trail
 
 ## License
 
