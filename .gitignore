@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.local
+*.token
+
+# Node / dashboard build
+node_modules/
+dist/
+.vite/
+
+# Crescendo runtime
+workspace/
+.crescendo/
+replay/*.json
+!replay/replay.example.json
+
+# OS
+.DS_Store
