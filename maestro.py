@@ -40,7 +40,7 @@ load_dotenv("/home/madgodinc/code/crescendo/.env")
 REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
 REPLY_TIMEOUT = 120      # seconds to wait for an agent's reply
-MAX_REVIEW_ROUNDS = 2    # bounded code<->review negotiation
+MAX_REVIEW_ROUNDS = 3    # bounded code<->review negotiation
 
 # Which skill libraries the Archivist pulls from for each role. This is the
 # "Archivist feeds skills to every agent" mechanism, driven deterministically.
@@ -201,6 +201,20 @@ class Maestro:
         return False
 
     @staticmethod
+    def _count_issues(review: str) -> int:
+        """Best-effort count of distinct issues in a reviewer's ISSUES reply
+        (numbered '1.' or bulleted lines). Falls back to 1 if it found issues
+        but no list structure, 0 if the text reads clean."""
+        text = _clean(review)
+        if "ISSUE" not in text.upper():
+            return 0
+        numbered = len(re.findall(r"(?m)^\s*\d+[.)]\s+\S", text))
+        if numbered:
+            return numbered
+        bullets = len(re.findall(r"(?m)^\s*[-*•]\s+\S", text))
+        return bullets or 1
+
+    @staticmethod
     def _parse_rider(reply: str) -> list[dict]:
         """Parse the Conductor's inferred resource contract into structured items.
 
@@ -268,10 +282,13 @@ class Maestro:
                         rider = result.get("rider") or []
                         rider_line = ("\n🎫 Нужен был доступ: "
                                       + ", ".join(r["name"] for r in rider)) if rider else ""
+                        verdict = result.get("review_verdict", "")
+                        review_line = (f"\n⚠ Зашло с открытыми замечаниями ({verdict})"
+                                       if verdict.startswith("shipped-with") else "")
                         await self.rc.agent_api_messages.create_agent_chat_message(
                             command_room,
                             message=ChatMessageRequest(
-                                content=f"✅ Готово: {result.get('deploy', '')}{rider_line}",
+                                content=f"✅ Готово: {result.get('deploy', '')}{rider_line}{review_line}",
                                 mentions=self_m))
                     except Exception as e:
                         await self.rc.agent_api_messages.create_agent_chat_message(
@@ -347,6 +364,7 @@ class Maestro:
         else:
             code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
             verdict = ""
+            last_review = ""
             for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
                 log("phase", f"code round {rnd}")
                 code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
@@ -357,6 +375,7 @@ class Maestro:
                     f"Read the workspace files yourself and review. "
                     f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
                 result[f"review_{rnd}"] = review
+                last_review = review
                 clean = "CLEAN" in review.upper() or "ISSUE" not in review.upper()
                 self.record("tuningfork", "review", _clean(review),
                             {"round": rnd, "verdict": "clean" if clean else "issues"})
@@ -364,7 +383,17 @@ class Maestro:
                     verdict = "clean"
                     break
                 code_task = f"The reviewer found issues: {review}\nFix them with write_page and reply with a one-line summary."
-            result["review_verdict"] = verdict or "max rounds reached"
+
+            # If we ran out of rounds with issues still open, ship the valid page
+            # but say so honestly — don't pass it off as clean.
+            if verdict != "clean":
+                open_issues = self._count_issues(last_review)
+                verdict = f"shipped-with-{open_issues}-open-issues"
+                log("review", f"max rounds reached — {open_issues} issue(s) still open, shipping honestly")
+                self.record("tuningfork", "review",
+                            f"⚠ max review rounds reached — shipping with {open_issues} open issue(s)",
+                            {"verdict": "shipped-with-issues", "open_issues": open_issues})
+            result["review_verdict"] = verdict
             self._done.add("code-review")
             await self._save("code-review")
 
