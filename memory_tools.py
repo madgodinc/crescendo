@@ -7,7 +7,6 @@ these; other agents may use them too.
 build_memory_tools(token) -> [remember, recall]
 """
 
-import json
 import os
 import re
 
@@ -147,30 +146,20 @@ class RecallArgs(BaseModel):
     limit: int = Field(default=5, description="Max results to return.")
 
 
-STATE_LIBRARY = os.environ.get("MGIMIND_STATE_LIBRARY", "crescendo-state")
-_STATE_MARKER = "CRESCENDO_RUNSTATE"
+_STATE_MARKER = "CRESCENDO_RUNSTATE"  # KV key prefix for run checkpoints
 
 
 async def save_checkpoint(token: str, run_id: str, state: dict) -> bool:
-    """Persist a run's full state to mgi-mind so it survives a crash.
+    """Persist a run's full state to mgi-mind's KV store so it survives a crash.
 
-    Stored as one memory line: '<marker> <run_id> <json>'. The newest line for
-    a run_id is the live checkpoint; older ones are stale history (cheap, and
-    avoids needing an update/delete API)."""
+    Uses the raw /kv/set blob surface — NOT searchable memory. Searchable memory
+    chunks and embeds, which mangles a large JSON checkpoint into pieces that
+    don't round-trip; KV stores the value verbatim under one key."""
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    blob = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-    content = f"{_STATE_MARKER} {run_id} {blob}"
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{MGIMIND_URL}/memory/add", headers=headers,
-                             json={"library": STATE_LIBRARY, "content": content})
-            # On a fresh server the state library may not exist yet — create it once
-            # and retry, so resume works out of the box.
-            if r.status_code == 400 and "not found" in r.text.lower():
-                await c.post(f"{MGIMIND_URL}/library/create", headers=headers,
-                             json={"name": STATE_LIBRARY})
-                r = await c.post(f"{MGIMIND_URL}/memory/add", headers=headers,
-                                 json={"library": STATE_LIBRARY, "content": content})
+            r = await c.post(f"{MGIMIND_URL}/kv/set", headers=headers,
+                             json={"key": f"{_STATE_MARKER}:{run_id}", "value": state})
             r.raise_for_status()
             return True
     except Exception:
@@ -178,39 +167,25 @@ async def save_checkpoint(token: str, run_id: str, state: dict) -> bool:
 
 
 async def load_checkpoint(token: str, run_id: str) -> dict | None:
-    """Load the newest unfinished checkpoint for a run_id, or None.
+    """Load the checkpoint for a run_id, or None.
 
-    Returns None when no checkpoint exists OR the latest is already marked
-    done — so a re-run of a finished brief starts clean."""
+    Returns None when no checkpoint exists OR it's already marked finished —
+    so a re-run of a brief that already shipped starts clean."""
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.post(f"{MGIMIND_URL}/memory/search", headers=headers,
-                             json={"query": f"{_STATE_MARKER} {run_id}",
-                                   "library": STATE_LIBRARY, "limit": 25})
+            r = await c.post(f"{MGIMIND_URL}/kv/get", headers=headers,
+                             json={"key": f"{_STATE_MARKER}:{run_id}"})
             r.raise_for_status()
-            results = r.json().get("results") or []
+            data = r.json()
     except Exception:
         return None
-    # Parse every matching state line for this exact run_id, keep the newest by
-    # phase progress (more completed phases = more recent). Search isn't ordered
-    # by time, so we rank by how far each checkpoint got.
-    best, best_score = None, -1
-    prefix = f"{_STATE_MARKER} {run_id} "
-    for m in results:
-        text = (m.get("content") or "").strip()
-        if not text.startswith(prefix):
-            continue
-        try:
-            state = json.loads(text[len(prefix):])
-        except Exception:
-            continue
-        score = len(state.get("_done_phases", []))
-        if score > best_score:
-            best, best_score = state, score
-    if best is None or best.get("_finished"):
+    if not data.get("found"):
         return None
-    return best
+    state = data.get("value")
+    if not isinstance(state, dict) or state.get("_finished"):
+        return None
+    return state
 
 
 def build_memory_tools(token: str) -> list[StructuredTool]:
