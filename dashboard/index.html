@@ -49,13 +49,30 @@
            padding:8px 16px; font-weight:650; cursor:pointer; font-size:14px; }
   button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
   .count { color:var(--dim); font-size:13px; margin-left:auto; }
+  .pill { font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.07em;
+          padding:3px 10px; border-radius:20px; margin-left:12px; vertical-align:middle; }
+  .pill.running { background:rgba(232,184,90,.18); color:var(--maestro); border:1px solid var(--maestro); }
+  .pill.done    { background:rgba(90,209,154,.18); color:var(--soloist); border:1px solid var(--soloist); }
+  .pill.failed  { background:rgba(217,123,176,.18); color:var(--tuningfork); border:1px solid var(--tuningfork); }
+  .pill.idle, .pill.offline { background:transparent; color:var(--dim); border:1px solid var(--line); }
+  .pill .phase { opacity:.75; font-weight:500; }
+  .runs { margin-top:10px; display:flex; gap:7px; flex-wrap:wrap; }
+  .runs .run { font-size:12px; padding:4px 10px; border:1px solid var(--line); border-radius:6px;
+               cursor:pointer; color:var(--dim); max-width:280px; overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
+  .runs .run:hover { border-color:var(--maestro); color:var(--ink); }
+  .runs .run.sel { border-color:var(--maestro); color:var(--ink); background:rgba(232,184,90,.08); }
+  .runs .run .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; }
+  .dot.running{background:var(--maestro)} .dot.done{background:var(--soloist)} .dot.failed{background:var(--tuningfork)}
 </style>
 </head>
 <body>
 <header>
-  <h1>Crescendo · <span class="accent">an orchestra of AI agents</span></h1>
+  <h1>Crescendo · <span class="accent">an orchestra of AI agents</span>
+    <span class="pill" id="status"></span></h1>
   <div class="sub">Maestro conducts; the Archivist feeds skills from memory; every decision is attributable.</div>
   <div class="brief" id="brief"></div>
+  <div class="runs" id="runs"></div>
 </header>
 <div class="wrap">
   <div id="graph"></div>
@@ -72,20 +89,25 @@
 <script>
 const COLOR = { maestro:'#e8b85a', conductor:'#6aa8ff', soloist:'#5ad19a',
                 tuningfork:'#d97bb0', stagetech:'#f0a868', archivist:'#a78bfa', human:'#ffffff' };
+const DEFAULT_AGENTS = [
+  { id:'conductor', label:'Conductor', role:'plans & routes' },
+  { id:'soloist', label:'Soloist', role:'writes code' },
+  { id:'tuningfork', label:'Tuning Fork', role:'reviews' },
+  { id:'stagetech', label:'Stage Tech', role:'deploys' },
+  { id:'archivist', label:'Archivist', role:'memory & skills' },
+];
+const fmt = ts => ts ? ts.slice(11,19) : '';
+const el = id => document.getElementById(id);
 
-async function boot() {
-  const data = await fetch('replay.json').then(r => r.json()).catch(() => null);
-  if (!data) { document.getElementById('feed').innerHTML =
-    '<div class="ev"><div class="txt">No replay.json yet — run maestro.py to generate one.</div></div>'; return; }
-  const { brief, agents, timeline } = data;
-  document.getElementById('brief').innerHTML = '<b>Brief:</b> ' + (brief || '');
+let cy, timeline = [], rendered = 0, curRunId = null;
+let liveMode = false, livePoll = null, selectedRun = null;
 
-  // graph: Maestro at centre, workers around it (star)
+function buildGraph(agents) {
   const nodes = [{ data:{ id:'maestro', label:'Maestro', role:'orchestrator' } }]
     .concat(agents.map(a => ({ data:{ id:a.id, label:a.label, role:a.role } })));
   const edges = agents.map(a => ({ data:{ id:'e_'+a.id, source:'maestro', target:a.id } }));
-  const cy = cytoscape({
-    container: document.getElementById('graph'),
+  cy = cytoscape({
+    container: el('graph'),
     elements: [...nodes, ...edges],
     style: [
       { selector:'node', style:{
@@ -104,53 +126,136 @@ async function boot() {
     layout:{ name:'concentric', concentric:n => n.id()==='maestro'?2:1, levelWidth:()=>1, minNodeSpacing:95 },
     userZoomingEnabled:false, userPanningEnabled:false, boxSelectionEnabled:false,
   });
+}
 
-  const feed = document.getElementById('feed'), countEl = document.getElementById('count');
-  let i = 0;
-  const fmt = ts => ts ? ts.slice(11,19) : '';
-  const reset = () => { feed.innerHTML=''; i=0; cy.elements().removeClass('active fired skillpath'); render(); };
-  const render = () => countEl.textContent = `${i} / ${timeline.length} events`;
+function renderCount() { el('count').textContent = `${rendered} / ${timeline.length} events`; }
 
-  function step() {
-    if (i >= timeline.length) return false;
-    const e = timeline[i++];
-    cy.nodes().removeClass('active');
-    cy.edges().removeClass('skillpath');
-    const node = cy.getElementById(e.actor);
-    if (node) node.addClass('active');
-    // skill injection: highlight Archivist -> target in purple
-    if (e.kind === 'skills' && e.meta && e.meta.to) {
-      const edge = cy.getElementById('e_' + e.meta.to);
-      if (edge) edge.addClass('skillpath');
-      cy.getElementById('archivist').addClass('active');
-    } else if (e.kind === 'recall' || e.kind === 'learn') {
-      // self-learning loop: Archivist pulls/stores a fix → Soloist applies it
-      const edge = cy.getElementById('e_soloist');
-      if (edge) edge.addClass('skillpath');
-      cy.getElementById('archivist').addClass('active');
-    } else {
-      const edge = cy.getElementById('e_' + e.actor);
-      if (edge) edge.addClass('fired');
-    }
-    const div = document.createElement('div');
-    div.className = 'ev ' + e.kind;
-    let txt = (e.text || '').replace(/</g,'&lt;');
-    // linkify a deployed URL
-    txt = txt.replace(/(https:\/\/[a-z0-9.-]+\.pages\.dev)/i, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-    div.innerHTML = `<span class="ts">${fmt(e.ts)}</span>` +
-      `<span class="who ${e.actor}">${e.actor}</span><span class="kind">${e.kind}</span>` +
-      `<div class="txt">${txt}</div>`;
-    feed.prepend(div);
-    render();
-    return true;
+function resetView() {
+  el('feed').innerHTML = ''; rendered = 0;
+  if (cy) cy.elements().removeClass('active fired skillpath');
+  renderCount();
+}
+
+// Render timeline[rendered] and advance. Returns false when caught up.
+function step() {
+  if (rendered >= timeline.length) return false;
+  const e = timeline[rendered++];
+  cy.nodes().removeClass('active');
+  cy.edges().removeClass('skillpath');
+  const node = cy.getElementById(e.actor);
+  if (node) node.addClass('active');
+  if (e.kind === 'skills' && e.meta && e.meta.to) {
+    const edge = cy.getElementById('e_' + e.meta.to);
+    if (edge) edge.addClass('skillpath');
+    cy.getElementById('archivist').addClass('active');
+  } else if (e.kind === 'recall' || e.kind === 'learn') {
+    const edge = cy.getElementById('e_soloist');
+    if (edge) edge.addClass('skillpath');
+    cy.getElementById('archivist').addClass('active');
+  } else {
+    const edge = cy.getElementById('e_' + e.actor);
+    if (edge) edge.addClass('fired');
+  }
+  const div = document.createElement('div');
+  div.className = 'ev ' + e.kind;
+  let txt = (e.text || '').replace(/</g,'&lt;');
+  txt = txt.replace(/(https:\/\/[a-z0-9.-]+\.pages\.dev)/i, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  div.innerHTML = `<span class="ts">${fmt(e.ts)}</span>` +
+    `<span class="who ${e.actor}">${e.actor}</span><span class="kind">${e.kind}</span>` +
+    `<div class="txt">${txt}</div>`;
+  el('feed').prepend(div);
+  renderCount();
+  return true;
+}
+
+function setStatus(status, phase) {
+  const p = el('status');
+  p.className = 'pill ' + (status || 'idle');
+  const ph = (phase && phase !== 'done') ? ` <span class="phase">· ${phase}</span>` : '';
+  p.innerHTML = (status || 'idle') + ph;
+}
+
+// Load a document {brief, agents, timeline, status, phase, run_id} into the view.
+function loadDoc(doc, opts={}) {
+  const agents = doc.agents && doc.agents.length ? doc.agents : DEFAULT_AGENTS;
+  if (!cy || curRunId !== doc.run_id) { if (cy) cy.destroy(); buildGraph(agents); }
+  curRunId = doc.run_id || null;
+  timeline = doc.timeline || [];
+  el('brief').innerHTML = '<b>Brief:</b> ' + (doc.brief || '');
+  setStatus(doc.status, doc.phase);
+  if (!opts.keepFeed) resetView();
+  // catch up to the full timeline (no animation on bulk load)
+  while (step()) {}
+}
+
+// --- live polling ---------------------------------------------------------
+async function pollLive() {
+  let doc;
+  try { doc = await fetch('/api/live').then(r => r.json()); }
+  catch { setStatus('offline'); return; }
+  if (!doc || doc.status === 'idle') {
+    if (!timeline.length) el('feed').innerHTML =
+      '<div class="ev"><div class="txt">No active run. Start one: <code>uv run python maestro.py "your brief"</code></div></div>';
+    setStatus('idle');
+    return;
+  }
+  if (selectedRun && selectedRun !== doc.run_id) return; // user is viewing a past run
+  if (doc.run_id !== curRunId) { loadDoc(doc); return; }  // new run -> full reload
+  // same run: append only the new tail, animating each new event in
+  el('brief').innerHTML = '<b>Brief:</b> ' + (doc.brief || '');
+  setStatus(doc.status, doc.phase);
+  timeline = doc.timeline || timeline;
+  while (rendered < timeline.length) step();
+}
+
+async function refreshRuns() {
+  let data; try { data = await fetch('/api/runs').then(r => r.json()); } catch { return; }
+  const recent = (data && data.recent) || [];
+  const box = el('runs');
+  box.innerHTML = '';
+  recent.forEach(r => {
+    const d = document.createElement('div');
+    d.className = 'run' + ((selectedRun||data.current) === r.run_id ? ' sel' : '');
+    d.title = r.brief || r.run_id;
+    d.innerHTML = `<span class="dot ${r.status}"></span>` + (r.brief || r.run_id).slice(0,40);
+    d.onclick = () => selectRun(r.run_id, r.run_id === data.current);
+    box.appendChild(d);
+  });
+}
+
+async function selectRun(runId, isCurrent) {
+  selectedRun = isCurrent ? null : runId;   // null = follow the live/current run
+  const url = isCurrent ? '/api/live' : '/api/run/' + runId;
+  try { const doc = await fetch(url).then(r => r.json()); loadDoc(doc); } catch {}
+  refreshRuns();
+}
+
+async function boot() {
+  // Prefer the live API (served by serve.py); fall back to the static replay.json.
+  let live = null;
+  try { live = await fetch('/api/live').then(r => r.ok ? r.json() : null); } catch {}
+  if (live) {
+    liveMode = true;
+    if (live.status && live.status !== 'idle') loadDoc(live);
+    else { buildGraph(DEFAULT_AGENTS); setStatus('idle'); }
+    await refreshRuns();
+    livePoll = setInterval(pollLive, 1500);
+    setInterval(refreshRuns, 10000);
+  } else {
+    // offline: static replay.json, with manual replay/step
+    const data = await fetch('replay.json').then(r => r.json()).catch(() => null);
+    if (!data) { el('feed').innerHTML =
+      '<div class="ev"><div class="txt">No data — run serve.py (live) or maestro.py (replay.json).</div></div>'; return; }
+    loadDoc({ ...data, status:'done', phase:'done' });
+    setStatus('offline');
   }
 
-  document.getElementById('step').onclick = step;
-  document.getElementById('play').onclick = async () => {
-    reset();
+  // Replay / Step always work on the in-memory timeline (great for finished runs).
+  el('step').onclick = step;
+  el('play').onclick = async () => {
+    resetView();
     while (step()) await new Promise(r => setTimeout(r, 800));
   };
-  reset();
 }
 boot();
 </script>

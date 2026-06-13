@@ -33,6 +33,8 @@ from memory_tools import (
     summarize_playbooks,
     save_checkpoint,
     load_checkpoint,
+    save_live,
+    update_active,
 )
 
 load_dotenv("/home/madgodinc/code/crescendo/.env")
@@ -60,6 +62,15 @@ WORKERS = {
     "stagetech": (os.environ["STAGE_TECH_AGENT_ID"], "trolltina1/stage-tech"),
     "archivist": (os.environ["ARCHIVIST_AGENT_ID"], "trolltina1/archivist"),
 }
+
+# Fixed roster for the dashboard graph (id matches the actor in record()).
+AGENTS = [
+    {"id": "conductor", "label": "Conductor", "role": "plans & routes"},
+    {"id": "soloist", "label": "Soloist", "role": "writes code"},
+    {"id": "tuningfork", "label": "Tuning Fork", "role": "reviews"},
+    {"id": "stagetech", "label": "Stage Tech", "role": "deploys"},
+    {"id": "archivist", "label": "Archivist", "role": "memory & skills"},
+]
 
 
 def log(phase: str, msg: str) -> None:
@@ -95,6 +106,9 @@ class Maestro:
         self._result: dict = {}
         self._done: set[str] = set()
         self._run_key: str = ""
+        self._brief: str = ""
+        self._started: str = ""
+        self._phase: str = "rider"   # current phase, for live pushes
 
     def record(self, actor: str, kind: str, text: str, meta: dict | None = None) -> None:
         """Append one event to the replay trail (rendered by the dashboard)."""
@@ -102,6 +116,27 @@ class Maestro:
             "ts": datetime.now(timezone.utc).isoformat(),
             "actor": actor, "kind": kind, "text": text[:600], "meta": meta or {},
         })
+
+    def _live_doc(self, status: str, phase: str) -> dict:
+        """The per-run document the dashboard polls (superset of replay.json)."""
+        return {
+            "run_id": self._run_key,
+            "brief": self._brief,
+            "status": status,        # running | done | failed
+            "phase": phase,
+            "started": self._started,
+            "updated": datetime.now(timezone.utc).isoformat(),
+            "agents": AGENTS,
+            "timeline": self.events,
+        }
+
+    async def _push_live(self, status: str, phase: str) -> None:
+        """Publish the live run state to mgi-mind so the dashboard can read it.
+        Best-effort: a KV hiccup must never break a run."""
+        try:
+            await save_live(ARCHIVIST_TOKEN, self._run_key, self._live_doc(status, phase))
+        except Exception as e:
+            log("live", f"push failed (ignored): {type(e).__name__}")
 
     async def say(self, to_key: str, text: str) -> datetime:
         """Post a message @mentioning one worker. Returns the send timestamp."""
@@ -177,6 +212,7 @@ class Maestro:
             self.record("archivist", "skills",
                         f"fed {n} skills to {to_key} from {', '.join(libs)}",
                         {"to": to_key, "count": n, "libraries": libs})
+            await self._push_live("running", self._phase)
             text = f"{skills}\n\n---\n{text}"
         return await self.ask(to_key, text, retries=retries)
 
@@ -291,6 +327,11 @@ class Maestro:
                                 content=f"✅ Готово: {result.get('deploy', '')}{rider_line}{review_line}",
                                 mentions=self_m))
                     except Exception as e:
+                        # surface the failure on the dashboard (not frozen on "running")
+                        if self._run_key:
+                            await self._push_live("failed", self._phase)
+                            await update_active(ARCHIVIST_TOKEN, self._run_key, brief,
+                                                "failed", datetime.now(timezone.utc).isoformat())
                         await self.rc.agent_api_messages.create_agent_chat_message(
                             command_room,
                             message=ChatMessageRequest(content=f"⚠️ Сбой: {type(e).__name__}: {e}", mentions=self_m))
@@ -309,20 +350,28 @@ class Maestro:
         # this exact brief. If found, restore its state and skip the phases that
         # already completed — the run picks up where it died, no rework.
         self._run_key = self._run_id(brief)
+        self._brief = brief
         prior = await load_checkpoint(ARCHIVIST_TOKEN, self._run_key)
         if prior:
             self._result = prior
             self._done = set(prior.get("_done_phases", []))
             self.events = prior.get("events", [])
             self._result["room"] = self.room   # room may differ on relaunch
+            self._started = prior.get("started") or datetime.now(timezone.utc).isoformat()
             log("resume", f"found checkpoint for this brief — resuming, "
                           f"{len(self._done)} phase(s) already done")
         else:
-            self._result = {"room": self.room, "brief": brief}
+            self._started = datetime.now(timezone.utc).isoformat()
+            self._result = {"room": self.room, "brief": brief, "started": self._started}
             self._done = set()
             self.events = []
             self.record("human", "brief", brief)
         result = self._result
+        # Make the run visible on the dashboard immediately (before the first
+        # agent reply) and survive a restart — state lives in mgi-mind.
+        await update_active(ARCHIVIST_TOKEN, self._run_key, brief, "running",
+                            datetime.now(timezone.utc).isoformat())
+        await self._push_live("running", "rider")
 
         # PHASE 0 — Resource Contract (the "give this, go rest" magic moment).
         # The Conductor INFERS from the brief the one upfront list of access the
@@ -347,6 +396,7 @@ class Maestro:
             log("rider", f"inferred {len(rider)} resource(s)")
             self._done.add("rider")
             await self._save("rider")
+            await self._push_live("running", "plan")
 
         # PHASE 1 — plan (Archivist feeds planning skills)
         if not self._resumed("plan"):
@@ -357,8 +407,10 @@ class Maestro:
             self.record("conductor", "plan", _clean(plan))
             self._done.add("plan")
             await self._save("plan")
+            await self._push_live("running", "code-review")
 
         # PHASE 2/3 — code <-> review negotiation (Archivist feeds design/css/antislop skills)
+        self._phase = "code-review"
         if self._resumed("code-review"):
             verdict = result.get("review_verdict", "clean")
         else:
@@ -369,6 +421,7 @@ class Maestro:
                 log("phase", f"code round {rnd}")
                 code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
                 self.record("soloist", "code", _clean(code_summary), {"round": rnd})
+                await self._push_live("running", "code-review")
                 # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
                 review = await self.ask_with_skills("tuningfork",
                     f"The Soloist finished work for the brief: {brief}\n"
@@ -379,6 +432,7 @@ class Maestro:
                 clean = "CLEAN" in review.upper() or "ISSUE" not in review.upper()
                 self.record("tuningfork", "review", _clean(review),
                             {"round": rnd, "verdict": "clean" if clean else "issues"})
+                await self._push_live("running", "code-review")
                 if clean:
                     verdict = "clean"
                     break
@@ -403,6 +457,7 @@ class Maestro:
         # (2) RECALL whether memory already solved this class of failure and feed
         # that fix to the Soloist, (3) on a successful rebuild LEARN the fix back
         # as a verified procedure. Next run recalls it instead of re-grinding.
+        self._phase = "deploy"
         if self._resumed("deploy"):
             deploy = result.get("deploy", "")
         else:
@@ -413,8 +468,10 @@ class Maestro:
                         {"url": next((w for w in url.split() if "pages.dev" in w), "")})
             self._done.add("deploy")
             await self._save("deploy")
+            await self._push_live("running", "archive")
 
         # PHASE 5 — archive
+        self._phase = "archive"
         if not self._resumed("archive"):
             archive = await self.ask("archivist",
                 f"Remember this run: brief={brief}; result={deploy}. Confirm in one line.")
@@ -426,6 +483,10 @@ class Maestro:
         self._result["_finished"] = True
         await self._save("done")
         self._dump_replay(brief)
+        # publish final state to the dashboard (done) and update history
+        await self._push_live("done", "done")
+        await update_active(ARCHIVIST_TOKEN, self._run_key, brief, "done",
+                            datetime.now(timezone.utc).isoformat())
         log("done", "run complete")
         return result
 
@@ -483,19 +544,12 @@ class Maestro:
         return deploy
 
     def _dump_replay(self, brief: str) -> None:
-        """Write the replay trail for the static dashboard."""
+        """Write the replay trail for the static (offline) dashboard."""
         import json
         path = "/home/madgodinc/code/crescendo/dashboard/replay.json"
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        agents = [
-            {"id": "conductor", "label": "Conductor", "role": "plans & routes"},
-            {"id": "soloist", "label": "Soloist", "role": "writes code"},
-            {"id": "tuningfork", "label": "Tuning Fork", "role": "reviews"},
-            {"id": "stagetech", "label": "Stage Tech", "role": "deploys"},
-            {"id": "archivist", "label": "Archivist", "role": "memory & skills"},
-        ]
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"brief": brief, "agents": agents, "timeline": self.events},
+            json.dump({"brief": brief, "agents": AGENTS, "timeline": self.events},
                       f, ensure_ascii=False, indent=2)
         log("replay", f"wrote {len(self.events)} events -> {path}")
 

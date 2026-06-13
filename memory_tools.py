@@ -188,6 +188,56 @@ async def load_checkpoint(token: str, run_id: str) -> dict | None:
     return state
 
 
+# ── Live dashboard trail ──────────────────────────────────────────────────────
+# The dashboard reads a run's live state from mgi-mind (single source of truth),
+# so it survives a maestro restart and stays a vitrine on top of Band. Each run
+# has a per-run live document under CRESCENDO_LIVE:<run_id>, plus one pointer key
+# CRESCENDO_ACTIVE holding the current run id and a capped history list.
+_LIVE_MARKER = "CRESCENDO_LIVE"
+_ACTIVE_KEY = "CRESCENDO_ACTIVE"
+
+
+async def save_live(token: str, run_id: str, doc: dict) -> bool:
+    """Overwrite the per-run live document. Whole-doc write (no read-modify-
+    write) so a concurrent dashboard read sees either the old or the new
+    complete blob, never a torn one. The timeline is small (tens of events)."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{MGIMIND_URL}/kv/set", headers=headers,
+                             json={"key": f"{_LIVE_MARKER}:{run_id}", "value": doc})
+            r.raise_for_status()
+            return True
+    except Exception:
+        return False
+
+
+async def update_active(token: str, run_id: str, brief: str, status: str,
+                        updated: str, cap: int = 15) -> bool:
+    """Set the active-run pointer and upsert this run into the history list.
+
+    Read-modify-write on CRESCENDO_ACTIVE, but called only at run start/end (and
+    on failure) — twice per run, single maestro process, so no real contention."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            g = await c.post(f"{MGIMIND_URL}/kv/get", headers=headers,
+                             json={"key": _ACTIVE_KEY})
+            g.raise_for_status()
+            cur = g.json().get("value") if g.json().get("found") else None
+            doc = cur if isinstance(cur, dict) else {}
+            recent = [r for r in (doc.get("recent") or []) if r.get("run_id") != run_id]
+            recent.insert(0, {"run_id": run_id, "brief": brief,
+                              "status": status, "updated": updated})
+            doc = {"current": run_id, "recent": recent[:cap]}
+            s = await c.post(f"{MGIMIND_URL}/kv/set", headers=headers,
+                             json={"key": _ACTIVE_KEY, "value": doc})
+            s.raise_for_status()
+            return True
+    except Exception:
+        return False
+
+
 def build_memory_tools(token: str) -> list[StructuredTool]:
     """Return [remember, recall] tools wired to mgi-mind with this agent's token."""
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
