@@ -58,11 +58,24 @@ def log(phase: str, msg: str) -> None:
     print(f"[maestro:{phase}] {msg}", flush=True)
 
 
+def _clean(text: str) -> str:
+    """Strip Band's @[[uuid]] mention tokens for readable replay text."""
+    return re.sub(r"@\[\[[^\]]+\]\]", "", text or "").strip()
+
+
 class Maestro:
     def __init__(self):
         self.rc = AsyncRestClient(api_key=os.environ["MAESTRO_API_KEY"], base_url=REST)
         self.room = None
         self.seen_ids: set[str] = set()
+        self.events: list[dict] = []   # replay trail for the dashboard
+
+    def record(self, actor: str, kind: str, text: str, meta: dict | None = None) -> None:
+        """Append one event to the replay trail (rendered by the dashboard)."""
+        self.events.append({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "actor": actor, "kind": kind, "text": text[:600], "meta": meta or {},
+        })
 
     async def say(self, to_key: str, text: str) -> datetime:
         """Post a message @mentioning one worker. Returns the send timestamp."""
@@ -133,7 +146,11 @@ class Maestro:
         libs = SKILL_LIBS.get(to_key, [])
         skills = await fetch_skills(ARCHIVIST_TOKEN, skill_query, libs) if libs else ""
         if skills:
-            log("skills", f"-> {to_key}: {skills.count(chr(10))} skills injected")
+            n = skills.count("\n- ")
+            log("skills", f"-> {to_key}: {n} skills injected")
+            self.record("archivist", "skills",
+                        f"fed {n} skills to {to_key} from {', '.join(libs)}",
+                        {"to": to_key, "count": n, "libraries": libs})
             text = f"{skills}\n\n---\n{text}"
         return await self.ask(to_key, text, retries=retries)
 
@@ -200,13 +217,16 @@ class Maestro:
         self.room = room or self.room
         # baseline: ignore all prior messages so we only read THIS run's replies
         self.seen_ids = {m.id for m in await self._room_messages(self.room)}
+        self.events = []
         result = {"room": self.room, "brief": brief}
+        self.record("human", "brief", brief)
 
         # PHASE 1 — plan (Archivist feeds planning skills)
         plan = await self.ask_with_skills("conductor",
             f"Brief from the human: {brief}\nProduce a short build plan (3-5 steps). "
             f"Reply with the plan only.", skill_query=brief)
         result["plan"] = plan
+        self.record("conductor", "plan", _clean(plan))
 
         # PHASE 2/3 — code <-> review negotiation (Archivist feeds design/css/antislop skills)
         code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
@@ -214,13 +234,17 @@ class Maestro:
         for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
             log("phase", f"code round {rnd}")
             code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
+            self.record("soloist", "code", _clean(code_summary), {"round": rnd})
             # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
             review = await self.ask_with_skills("tuningfork",
                 f"The Soloist finished work for the brief: {brief}\n"
                 f"Read the workspace files yourself and review. "
                 f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
             result[f"review_{rnd}"] = review
-            if "CLEAN" in review.upper() or "ISSUE" not in review.upper():
+            clean = "CLEAN" in review.upper() or "ISSUE" not in review.upper()
+            self.record("tuningfork", "review", _clean(review),
+                        {"round": rnd, "verdict": "clean" if clean else "issues"})
+            if clean:
                 verdict = "clean"
                 break
             code_task = f"The reviewer found issues: {review}\nFix them with write_page and reply with a one-line summary."
@@ -241,14 +265,36 @@ class Maestro:
             deploy = await self.ask("stagetech",
                 "Call deploy_site again and reply with the exact live URL.")
         result["deploy"] = deploy
+        url = _clean(deploy)
+        self.record("stagetech", "deploy", url,
+                    {"url": next((w for w in url.split() if "pages.dev" in w), "")})
 
         # PHASE 5 — archive
         archive = await self.ask("archivist",
             f"Remember this run: brief={brief}; result={deploy}. Confirm in one line.")
         result["archive"] = archive
+        self.record("archivist", "archive", _clean(archive))
 
+        self._dump_replay(brief)
         log("done", "run complete")
         return result
+
+    def _dump_replay(self, brief: str) -> None:
+        """Write the replay trail for the static dashboard."""
+        import json
+        path = "/home/madgodinc/code/crescendo/dashboard/replay.json"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        agents = [
+            {"id": "conductor", "label": "Conductor", "role": "plans & routes"},
+            {"id": "soloist", "label": "Soloist", "role": "writes code"},
+            {"id": "tuningfork", "label": "Tuning Fork", "role": "reviews"},
+            {"id": "stagetech", "label": "Stage Tech", "role": "deploys"},
+            {"id": "archivist", "label": "Archivist", "role": "memory & skills"},
+        ]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"brief": brief, "agents": agents, "timeline": self.events},
+                      f, ensure_ascii=False, indent=2)
+        log("replay", f"wrote {len(self.events)} events -> {path}")
 
 
 async def main() -> None:
