@@ -12,6 +12,7 @@ Run: uv run python maestro.py "your brief here"
 """
 
 import asyncio
+import hashlib
 import os
 import re
 import sys
@@ -30,6 +31,8 @@ from memory_tools import (
     recall_playbook,
     learn_playbook,
     summarize_playbooks,
+    save_checkpoint,
+    load_checkpoint,
 )
 
 load_dotenv("/home/madgodinc/code/crescendo/.env")
@@ -88,6 +91,10 @@ class Maestro:
         self.room = None
         self.seen_ids: set[str] = set()
         self.events: list[dict] = []   # replay trail for the dashboard
+        # crash-proof-resume state (set per run in run())
+        self._result: dict = {}
+        self._done: set[str] = set()
+        self._run_key: str = ""
 
     def record(self, actor: str, kind: str, text: str, meta: dict | None = None) -> None:
         """Append one event to the replay trail (rendered by the dashboard)."""
@@ -172,6 +179,26 @@ class Maestro:
                         {"to": to_key, "count": n, "libraries": libs})
             text = f"{skills}\n\n---\n{text}"
         return await self.ask(to_key, text, retries=retries)
+
+    @staticmethod
+    def _run_id(brief: str) -> str:
+        """Stable id for a brief so a re-launch finds its checkpoint."""
+        return "run_" + hashlib.sha1(brief.strip().encode("utf-8")).hexdigest()[:12]
+
+    async def _save(self, phase: str) -> None:
+        """Checkpoint the run state after a phase completes — survives a crash."""
+        self._result["_done_phases"] = sorted(self._done)
+        self._result["events"] = self.events
+        ok = await save_checkpoint(ARCHIVIST_TOKEN, self._run_key, self._result)
+        if ok:
+            log("checkpoint", f"saved after '{phase}' ({len(self._done)} phases done)")
+
+    def _resumed(self, phase: str) -> bool:
+        """True if this phase was already done in a prior (crashed) run — skip it."""
+        if phase in self._done:
+            log("resume", f"skip '{phase}' — already done before the crash")
+            return True
+        return False
 
     @staticmethod
     def _parse_rider(reply: str) -> list[dict]:
@@ -260,59 +287,86 @@ class Maestro:
         self.room = room or self.room
         # baseline: ignore all prior messages so we only read THIS run's replies
         self.seen_ids = {m.id for m in await self._room_messages(self.room)}
-        self.events = []
-        result = {"room": self.room, "brief": brief}
-        self.record("human", "brief", brief)
+
+        # CRASH-PROOF RESUME: look for a checkpoint from a prior crashed run of
+        # this exact brief. If found, restore its state and skip the phases that
+        # already completed — the run picks up where it died, no rework.
+        self._run_key = self._run_id(brief)
+        prior = await load_checkpoint(ARCHIVIST_TOKEN, self._run_key)
+        if prior:
+            self._result = prior
+            self._done = set(prior.get("_done_phases", []))
+            self.events = prior.get("events", [])
+            self._result["room"] = self.room   # room may differ on relaunch
+            log("resume", f"found checkpoint for this brief — resuming, "
+                          f"{len(self._done)} phase(s) already done")
+        else:
+            self._result = {"room": self.room, "brief": brief}
+            self._done = set()
+            self.events = []
+            self.record("human", "brief", brief)
+        result = self._result
 
         # PHASE 0 — Resource Contract (the "give this, go rest" magic moment).
         # The Conductor INFERS from the brief the one upfront list of access the
         # project needs — credentials, services, integrations — instead of us
         # hardcoding it. Maestro records it and reports it back to the human so
         # they grant access once, then step away.
-        rider_raw = await self.ask("conductor",
-            f"Brief from the human: {brief}\n"
-            f"Before any planning, infer the RESOURCE CONTRACT: the complete list "
-            f"of external access/credentials/services this project will need to "
-            f"ship (e.g. a hosting account, a domain, an API key, a data source). "
-            f"Infer it from the brief — do not assume tools we didn't ask for. "
-            f"Reply with one item per line, each as 'RESOURCE: <name> — <why>'. "
-            f"If the project needs nothing beyond our standard deploy, reply "
-            f"'RESOURCE: none — ships on our Cloudflare Pages account'.")
-        rider = self._parse_rider(rider_raw)
-        result["rider"] = rider
-        self.record("conductor", "rider",
-                    "; ".join(f"{r['name']}: {r['why']}" for r in rider) or "none",
-                    {"items": rider})
-        log("rider", f"inferred {len(rider)} resource(s)")
+        if not self._resumed("rider"):
+            rider_raw = await self.ask("conductor",
+                f"Brief from the human: {brief}\n"
+                f"Before any planning, infer the RESOURCE CONTRACT: the complete list "
+                f"of external access/credentials/services this project will need to "
+                f"ship (e.g. a hosting account, a domain, an API key, a data source). "
+                f"Infer it from the brief — do not assume tools we didn't ask for. "
+                f"Reply with one item per line, each as 'RESOURCE: <name> — <why>'. "
+                f"If the project needs nothing beyond our standard deploy, reply "
+                f"'RESOURCE: none — ships on our Cloudflare Pages account'.")
+            rider = self._parse_rider(rider_raw)
+            result["rider"] = rider
+            self.record("conductor", "rider",
+                        "; ".join(f"{r['name']}: {r['why']}" for r in rider) or "none",
+                        {"items": rider})
+            log("rider", f"inferred {len(rider)} resource(s)")
+            self._done.add("rider")
+            await self._save("rider")
 
         # PHASE 1 — plan (Archivist feeds planning skills)
-        plan = await self.ask_with_skills("conductor",
-            f"Brief from the human: {brief}\nProduce a short build plan (3-5 steps). "
-            f"Reply with the plan only.", skill_query=brief)
-        result["plan"] = plan
-        self.record("conductor", "plan", _clean(plan))
+        if not self._resumed("plan"):
+            plan = await self.ask_with_skills("conductor",
+                f"Brief from the human: {brief}\nProduce a short build plan (3-5 steps). "
+                f"Reply with the plan only.", skill_query=brief)
+            result["plan"] = plan
+            self.record("conductor", "plan", _clean(plan))
+            self._done.add("plan")
+            await self._save("plan")
 
         # PHASE 2/3 — code <-> review negotiation (Archivist feeds design/css/antislop skills)
-        code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
-        verdict = ""
-        for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
-            log("phase", f"code round {rnd}")
-            code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
-            self.record("soloist", "code", _clean(code_summary), {"round": rnd})
-            # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
-            review = await self.ask_with_skills("tuningfork",
-                f"The Soloist finished work for the brief: {brief}\n"
-                f"Read the workspace files yourself and review. "
-                f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
-            result[f"review_{rnd}"] = review
-            clean = "CLEAN" in review.upper() or "ISSUE" not in review.upper()
-            self.record("tuningfork", "review", _clean(review),
-                        {"round": rnd, "verdict": "clean" if clean else "issues"})
-            if clean:
-                verdict = "clean"
-                break
-            code_task = f"The reviewer found issues: {review}\nFix them with write_page and reply with a one-line summary."
-        result["review_verdict"] = verdict or "max rounds reached"
+        if self._resumed("code-review"):
+            verdict = result.get("review_verdict", "clean")
+        else:
+            code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
+            verdict = ""
+            for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
+                log("phase", f"code round {rnd}")
+                code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
+                self.record("soloist", "code", _clean(code_summary), {"round": rnd})
+                # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
+                review = await self.ask_with_skills("tuningfork",
+                    f"The Soloist finished work for the brief: {brief}\n"
+                    f"Read the workspace files yourself and review. "
+                    f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
+                result[f"review_{rnd}"] = review
+                clean = "CLEAN" in review.upper() or "ISSUE" not in review.upper()
+                self.record("tuningfork", "review", _clean(review),
+                            {"round": rnd, "verdict": "clean" if clean else "issues"})
+                if clean:
+                    verdict = "clean"
+                    break
+                code_task = f"The reviewer found issues: {review}\nFix them with write_page and reply with a one-line summary."
+            result["review_verdict"] = verdict or "max rounds reached"
+            self._done.add("code-review")
+            await self._save("code-review")
 
         # PHASE 4 — deploy. If the deploy gate refuses (invalid/truncated page),
         # bounce back to the Soloist to rebuild, then retry — don't ship junk.
@@ -320,6 +374,35 @@ class Maestro:
         # (2) RECALL whether memory already solved this class of failure and feed
         # that fix to the Soloist, (3) on a successful rebuild LEARN the fix back
         # as a verified procedure. Next run recalls it instead of re-grinding.
+        if self._resumed("deploy"):
+            deploy = result.get("deploy", "")
+        else:
+            deploy = await self._deploy_phase(brief)
+            result["deploy"] = deploy
+            url = _clean(deploy)
+            self.record("stagetech", "deploy", url,
+                        {"url": next((w for w in url.split() if "pages.dev" in w), "")})
+            self._done.add("deploy")
+            await self._save("deploy")
+
+        # PHASE 5 — archive
+        if not self._resumed("archive"):
+            archive = await self.ask("archivist",
+                f"Remember this run: brief={brief}; result={deploy}. Confirm in one line.")
+            result["archive"] = archive
+            self.record("archivist", "archive", _clean(archive))
+            self._done.add("archive")
+
+        # run finished cleanly — mark the checkpoint done so a re-run starts fresh
+        self._result["_finished"] = True
+        await self._save("done")
+        self._dump_replay(brief)
+        log("done", "run complete")
+        return result
+
+    async def _deploy_phase(self, brief: str) -> str:
+        """Deploy with the self-learning loop. On a gate refusal: recall a known
+        fix, feed it to the Soloist, and on a passing rebuild learn it verified."""
         deploy = await self.ask("stagetech",
             "The work passed review. Call deploy_site and reply with the exact live URL it returns.")
         for _ in range(2):
@@ -368,20 +451,7 @@ class Maestro:
                     self.record("archivist", "learn",
                                 f"learned verified fix for: {sig}",
                                 {"error": sig, "verified": True})
-        result["deploy"] = deploy
-        url = _clean(deploy)
-        self.record("stagetech", "deploy", url,
-                    {"url": next((w for w in url.split() if "pages.dev" in w), "")})
-
-        # PHASE 5 — archive
-        archive = await self.ask("archivist",
-            f"Remember this run: brief={brief}; result={deploy}. Confirm in one line.")
-        result["archive"] = archive
-        self.record("archivist", "archive", _clean(archive))
-
-        self._dump_replay(brief)
-        log("done", "run complete")
-        return result
+        return deploy
 
     def _dump_replay(self, brief: str) -> None:
         """Write the replay trail for the static dashboard."""
