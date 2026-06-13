@@ -173,6 +173,27 @@ class Maestro:
             text = f"{skills}\n\n---\n{text}"
         return await self.ask(to_key, text, retries=retries)
 
+    @staticmethod
+    def _parse_rider(reply: str) -> list[dict]:
+        """Parse the Conductor's inferred resource contract into structured items.
+
+        Accepts 'RESOURCE: <name> — <why>' lines (em-dash, hyphen, or colon as
+        the separator). 'none' collapses to an empty contract."""
+        items: list[dict] = []
+        for line in _clean(reply).splitlines():
+            m = re.match(r"\s*RESOURCE:\s*(.+)", line, re.IGNORECASE)
+            if not m:
+                continue
+            body = m.group(1).strip()
+            if body.lower().startswith("none"):
+                continue
+            parts = re.split(r"\s+[—–-]\s+|\s*:\s+", body, maxsplit=1)
+            name = parts[0].strip()
+            why = parts[1].strip() if len(parts) > 1 else ""
+            if name:
+                items.append({"name": name, "why": why})
+        return items
+
     def _read_site(self) -> str:
         """Read the product file the Soloist wrote, so the reviewer sees real code."""
         path = "/home/madgodinc/code/crescendo/workspace/site/index.html"
@@ -217,10 +238,13 @@ class Maestro:
                     self_m = [Mention(id=m.sender_id, handle=getattr(m, "sender_name", None) or "user")]
                     try:
                         result = await self.run(brief, room=command_room)
+                        rider = result.get("rider") or []
+                        rider_line = ("\n🎫 Нужен был доступ: "
+                                      + ", ".join(r["name"] for r in rider)) if rider else ""
                         await self.rc.agent_api_messages.create_agent_chat_message(
                             command_room,
                             message=ChatMessageRequest(
-                                content=f"✅ Готово: {result.get('deploy', '')}",
+                                content=f"✅ Готово: {result.get('deploy', '')}{rider_line}",
                                 mentions=self_m))
                     except Exception as e:
                         await self.rc.agent_api_messages.create_agent_chat_message(
@@ -239,6 +263,27 @@ class Maestro:
         self.events = []
         result = {"room": self.room, "brief": brief}
         self.record("human", "brief", brief)
+
+        # PHASE 0 — Resource Contract (the "give this, go rest" magic moment).
+        # The Conductor INFERS from the brief the one upfront list of access the
+        # project needs — credentials, services, integrations — instead of us
+        # hardcoding it. Maestro records it and reports it back to the human so
+        # they grant access once, then step away.
+        rider_raw = await self.ask("conductor",
+            f"Brief from the human: {brief}\n"
+            f"Before any planning, infer the RESOURCE CONTRACT: the complete list "
+            f"of external access/credentials/services this project will need to "
+            f"ship (e.g. a hosting account, a domain, an API key, a data source). "
+            f"Infer it from the brief — do not assume tools we didn't ask for. "
+            f"Reply with one item per line, each as 'RESOURCE: <name> — <why>'. "
+            f"If the project needs nothing beyond our standard deploy, reply "
+            f"'RESOURCE: none — ships on our Cloudflare Pages account'.")
+        rider = self._parse_rider(rider_raw)
+        result["rider"] = rider
+        self.record("conductor", "rider",
+                    "; ".join(f"{r['name']}: {r['why']}" for r in rider) or "none",
+                    {"items": rider})
+        log("rider", f"inferred {len(rider)} resource(s)")
 
         # PHASE 1 — plan (Archivist feeds planning skills)
         plan = await self.ask_with_skills("conductor",

@@ -37,8 +37,10 @@
   .who.human{color:#fff} .who.conductor{color:var(--conductor)} .who.soloist{color:var(--soloist)}
   .who.tuningfork{color:var(--tuningfork)} .who.stagetech{color:var(--stagetech)}
   .who.archivist{color:var(--archivist)}
-  .ev.skills { background:rgba(167,139,250,.08); border-left:3px solid var(--archivist); }
-  .ev.skills .txt { color:var(--archivist); }
+  .ev.skills, .ev.recall, .ev.learn { background:rgba(167,139,250,.08); border-left:3px solid var(--archivist); }
+  .ev.skills .txt, .ev.recall .txt, .ev.learn .txt { color:var(--archivist); }
+  .ev.rider { background:rgba(245,200,90,.08); border-left:3px solid var(--maestro); }
+  .ev.rider .txt { color:#f0d089; }
   .ev.review .txt { color:#ffd27b; }
   .ev.deploy { background:rgba(90,209,154,.08); border-left:3px solid var(--soloist); }
   .ev.deploy a { color:var(--soloist); font-weight:650; }
@@ -119,6 +121,11 @@ async function boot() {
     // skill injection: highlight Archivist -> target in purple
     if (e.kind === 'skills' && e.meta && e.meta.to) {
       const edge = cy.getElementById('e_' + e.meta.to);
+      if (edge) edge.addClass('skillpath');
+      cy.getElementById('archivist').addClass('active');
+    } else if (e.kind === 'recall' || e.kind === 'learn') {
+      // self-learning loop: Archivist pulls/stores a fix → Soloist applies it
+      const edge = cy.getElementById('e_soloist');
       if (edge) edge.addClass('skillpath');
       cy.getElementById('archivist').addClass('active');
     } else {
