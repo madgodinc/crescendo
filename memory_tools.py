@@ -17,6 +17,30 @@ MGIMIND_URL = os.environ.get("MGIMIND_URL", "http://127.0.0.1:8765")
 LIBRARY = os.environ.get("MGIMIND_LIBRARY", "crescendo")
 
 
+async def fetch_skills(token: str, query: str, libraries: list[str], per_lib: int = 3) -> str:
+    """Pull the most relevant skills for a task from the given skill libraries.
+
+    This is the Archivist's core service: weak models get expert guidance pulled
+    from memory before they work, so they punch above bare-model quality.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    found: list[str] = []
+    async with httpx.AsyncClient(timeout=20) as c:
+        for lib in libraries:
+            try:
+                r = await c.post(f"{MGIMIND_URL}/memory/search", headers=headers,
+                                 json={"query": query, "library": lib, "limit": per_lib})
+                for m in (r.json().get("results") or []):
+                    text = (m.get("content") or "").strip()
+                    if text:
+                        found.append(f"- {text}")
+            except Exception:
+                continue
+    if not found:
+        return ""
+    return "Relevant skills from memory (apply these):\n" + "\n".join(found)
+
+
 class RememberArgs(BaseModel):
     content: str = Field(description="A fact, decision, or piece of context to store in memory.")
 

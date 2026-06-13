@@ -25,12 +25,24 @@ from thenvoi_rest.types.chat_message_request import ChatMessageRequest
 from thenvoi_rest.types.chat_message_request_mentions_item import ChatMessageRequestMentionsItem as Mention
 from thenvoi_rest.types.participant_request import ParticipantRequest
 
+from memory_tools import fetch_skills
+
 load_dotenv("/home/madgodinc/code/crescendo/.env")
 
 REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
 REPLY_TIMEOUT = 120      # seconds to wait for an agent's reply
 MAX_REVIEW_ROUNDS = 2    # bounded code<->review negotiation
+
+# Which skill libraries the Archivist pulls from for each role. This is the
+# "Archivist feeds skills to every agent" mechanism, driven deterministically.
+SKILL_LIBS = {
+    "conductor": ["skill-process"],
+    "soloist": ["skill-design", "skill-css", "skill-antislop", "skill-security"],
+    "tuningfork": ["skill-process", "skill-security", "skill-antislop"],
+    "stagetech": ["skill-process"],
+}
+ARCHIVIST_TOKEN = os.environ["MGIMIND_TOKEN_ARCHIVIST"]
 
 # worker agents Maestro pulls into the room (handle + uuid from .env)
 WORKERS = {
@@ -114,6 +126,17 @@ class Maestro:
                 else:
                     raise
 
+    async def ask_with_skills(self, to_key: str, text: str, skill_query: str,
+                              retries: int = 1) -> str:
+        """Ask an agent, but first have the Archivist pull relevant skills from the
+        skill libraries and prepend them — weak models get expert guidance upfront."""
+        libs = SKILL_LIBS.get(to_key, [])
+        skills = await fetch_skills(ARCHIVIST_TOKEN, skill_query, libs) if libs else ""
+        if skills:
+            log("skills", f"-> {to_key}: {skills.count(chr(10))} skills injected")
+            text = f"{skills}\n\n---\n{text}"
+        return await self.ask(to_key, text, retries=retries)
+
     def _read_site(self) -> str:
         """Read the product file the Soloist wrote, so the reviewer sees real code."""
         path = "/home/madgodinc/code/crescendo/workspace/site/index.html"
@@ -179,23 +202,23 @@ class Maestro:
         self.seen_ids = {m.id for m in await self._room_messages(self.room)}
         result = {"room": self.room, "brief": brief}
 
-        # PHASE 1 — plan
-        plan = await self.ask("conductor",
+        # PHASE 1 — plan (Archivist feeds planning skills)
+        plan = await self.ask_with_skills("conductor",
             f"Brief from the human: {brief}\nProduce a short build plan (3-5 steps). "
-            f"Reply with the plan only.")
+            f"Reply with the plan only.", skill_query=brief)
         result["plan"] = plan
 
-        # PHASE 2/3 — code <-> review negotiation
+        # PHASE 2/3 — code <-> review negotiation (Archivist feeds design/css/antislop skills)
         code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
         verdict = ""
         for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
             log("phase", f"code round {rnd}")
-            code_summary = await self.ask("soloist", code_task)
+            code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
             # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
-            review = await self.ask("tuningfork",
+            review = await self.ask_with_skills("tuningfork",
                 f"The Soloist finished work for the brief: {brief}\n"
                 f"Read the workspace files yourself and review. "
-                f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.")
+                f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
             result[f"review_{rnd}"] = review
             if "CLEAN" in review.upper() or "ISSUE" not in review.upper():
                 verdict = "clean"
