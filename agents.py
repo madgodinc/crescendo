@@ -277,8 +277,11 @@ def _llm(spec, agent_name="agent", mind_token=""):
     # output — turn it off so the model spends its budget on the actual answer.
     if "gemini" in model.lower():
         extra["model_kwargs"] = {"reasoning_effort": "none"}
+    # max_tokens is reserved against the per-minute token budget, so an 8k
+    # reservation plus a big prompt trips OpenAI's 30k TPM Tier-1 limit. 4k is
+    # plenty for a one-page site and a short review, and leaves room for input.
     return TokenTrackingChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                      temperature=0, max_tokens=8192, timeout=45, max_retries=0,
+                      temperature=0, max_tokens=4096, timeout=45, max_retries=0,
                       stream_usage=True,   # emit usage_metadata on the final stream chunk
                       agent_name=agent_name, mind_token=mind_token, **extra)
 
