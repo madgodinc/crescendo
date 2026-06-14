@@ -46,6 +46,31 @@ DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
 
 LIVE_MARKER = "CRESCENDO_LIVE"
 ACTIVE_KEY = "CRESCENDO_ACTIVE"
+# A live run pushes a heartbeat (the doc's `updated` time) on every step. If a
+# run is still marked "running" but hasn't been touched in this long, its driver
+# died (crash / kill / hung provider) — show it as stale, not active, so dead
+# runs never sit forever in the dashboard.
+STALE_AFTER_S = 150
+
+
+def _is_stale(updated: str) -> bool:
+    if not updated:
+        return False
+    try:
+        from datetime import datetime, timezone
+        t = datetime.fromisoformat(updated)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds() > STALE_AFTER_S
+    except Exception:
+        return False
+
+
+def _freshen(doc):
+    """Downgrade a stale 'running' status to 'stale' based on the heartbeat."""
+    if isinstance(doc, dict) and doc.get("status") == "running" and _is_stale(doc.get("updated", "")):
+        doc = {**doc, "status": "stale"}
+    return doc
 
 # Only these static files are servable (no directory traversal, no surprises).
 _MIME = {".html": "text/html", ".js": "application/javascript",
@@ -401,6 +426,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/runs":
                 active = _kv_get(ACTIVE_KEY) or {"current": None, "recent": []}
+                active = {**active, "recent": [_freshen(r) for r in active.get("recent", [])]}
+                # if the current run went stale, don't keep pointing at it as live
+                cur_item = next((r for r in active["recent"] if r.get("run_id") == active.get("current")), None)
+                if cur_item and cur_item.get("status") == "stale":
+                    active["current"] = next((r["run_id"] for r in active["recent"]
+                                              if r.get("status") == "done"), None)
                 return self._send_json(active)
             if path == "/api/learned":
                 return self._send_json({"fixes": learned_fixes()})
@@ -410,7 +441,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/live":
                 active = _kv_get(ACTIVE_KEY) or {}
                 cur = active.get("current")
-                doc = _kv_get(f"{LIVE_MARKER}:{cur}") if cur else None
+                doc = _freshen(_kv_get(f"{LIVE_MARKER}:{cur}")) if cur else None
                 return self._send_json(doc or {"status": "idle"})
             if path.startswith("/api/run/"):
                 run_id = path[len("/api/run/"):]
