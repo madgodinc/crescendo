@@ -142,7 +142,7 @@ REPLY_RULE = (
 # Featherless->fallback. Both providers are wired so whichever is healthy wins.
 GPT4O = (AIMLAPI, "gpt-4o")                              # reliable tool calls — tool roles
 DSCHAT = (AIMLAPI, "deepseek-chat")                      # conductor (plan text)
-FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # fallback (reliable tool calls)
+FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # reliable tool calls; Tuning Fork primary (AIMLAPI stalls on its heavy review turn)
 FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
@@ -162,7 +162,7 @@ ROSTER = {
         "with target='_blank' MUST have rel='noopener'; load resources over https only; never hard-code "
         "any API key or token. Do NOT add a favicon or base64. Do NOT paste code in chat. After the "
         "tool returns, reply one line."),
-    "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
+    "Tuning Fork": ("TUNING_FORK", FB_QWEN72, GPT4O,
         REPLY_RULE + "You are the Tuning Fork — the critic. FIRST call check_page (pass a key "
         "term from the brief as must_contain) to RUN a deterministic check: structure + a headless "
         "browser render reporting console/JS errors and visible content. If check_page reports "
@@ -240,7 +240,7 @@ def _llm(spec, agent_name="agent", mind_token=""):
     Tracks token usage per agent for the dashboard."""
     (base_url, api_key), model = spec
     return TokenTrackingChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                      temperature=0, max_tokens=8192, timeout=70, max_retries=0,
+                      temperature=0, max_tokens=8192, timeout=45, max_retries=0,
                       stream_usage=True,   # emit usage_metadata on the final stream chunk
                       agent_name=agent_name, mind_token=mind_token)
 
