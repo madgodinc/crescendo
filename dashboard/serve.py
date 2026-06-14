@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from ledger import ground_run  # noqa: E402  (grounding pass over the audit trail)
+from signing import verify_event  # noqa: E402  (per-author HMAC verification)
 
 # load .env from the repo root if present (works locally, in Docker, and from a
 # clone) without a hardcoded path; env vars already set always win.
@@ -200,6 +201,7 @@ def render_audit(doc: dict) -> str:
              "attested": ""}
     rows, prev = [], "0" * 64
     total_tok = 0
+    signed_n = 0
     for i, ev in enumerate(tl, 1):
         actor = ev.get("actor", "?")
         kind = ev.get("kind", "")
@@ -211,6 +213,15 @@ def render_audit(doc: dict) -> str:
         # hash chain: h_i = sha256(h_{i-1} || actor || kind || text || ts)
         h = hashlib.sha256((prev + actor + kind + text + ts).encode("utf-8")).hexdigest()
         prev = h
+        # per-author HMAC: verify the row was signed by the agent that claims it
+        sv = verify_event(actor, kind, text, ts, ev.get("sig", ""))
+        if sv is True:
+            sigbadge = '<span class="vb sig" title="HMAC verified for this author">signed ✓</span>'
+            signed_n += 1
+        elif sv is False:
+            sigbadge = '<span class="vb brk" title="signature does not verify">forged?</span>'
+        else:
+            sigbadge = ""
         verdict = meta.get("verdict")
         badge = ""
         if verdict == "clean":
@@ -227,7 +238,7 @@ def render_audit(doc: dict) -> str:
           <td class="n">{i}</td>
           <td class="who"><span class="dot {e(actor)}"></span>{e(ROLE.get(actor, actor))}</td>
           <td class="ph">{e(PHASE_OF.get(kind, kind))}{rnd}</td>
-          <td class="kind">{e(kind)} {badge}{gb}</td>
+          <td class="kind">{e(kind)} {badge}{gb}{sigbadge}</td>
           <td class="content">{e(text)}</td>
           <td class="meta">{tokstr}<span class="ts">{e(ts[11:19] if len(ts) > 19 else ts)}</span>
               <span class="hash" title="chained SHA-256">{h[:12]}…</span></td>
@@ -276,6 +287,7 @@ def render_audit(doc: dict) -> str:
   .vb.url {{ background:rgba(79,224,168,.15); color:var(--green); }}
   .vb.gnd {{ background:rgba(90,168,255,.14); color:var(--blue); }}
   .vb.brk {{ background:rgba(255,123,198,.18); color:var(--pink); }}
+  .vb.sig {{ background:rgba(184,155,255,.16); color:var(--purple); }}
   .foot {{ color:var(--dim); font-size:12px; margin-top:20px; line-height:1.7; }}
   .foot code {{ font-family:'JetBrains Mono',monospace; color:var(--purple); }}
   a.back {{ color:var(--blue); text-decoration:none; font-size:13px; }}
@@ -301,16 +313,22 @@ def render_audit(doc: dict) -> str:
     </table>
   </div>
   <div class="foot">
-    <b style="color:var(--ink)">How to verify:</b> each row's hash is
+    <b style="color:var(--ink)">Integrity (hash chain):</b> each row's hash is
     <code>SHA-256(previous_hash + agent + action + content + timestamp)</code>.
-    The chain root after the last decision is <code>{prev[:24]}…</code>.
-    Editing any past decision changes its hash and every hash after it, so the trail is tamper-evident.
-    Source of record: the mgi-mind memory ledger, where each agent writes under its own token.
+    Chain root after the last decision: <code>{prev[:24]}…</code>.
+    Editing any past row changes its hash and every hash after it, so a post-hoc edit to the
+    published trail is detectable.
+    <br><b style="color:var(--ink)">Authorship ({signed_n}/{len(tl)} signed):</b> each row also carries
+    <code>HMAC(agent_key, agent + action + content + timestamp)</code>. A row's author can't be forged
+    without that agent's key, so an external party with store access can't rewrite a row under a different
+    author. (Threat model, stated plainly: this is integrity + provenance of the published trail. It is
+    tamper-<i>evident</i>, not tamper-<i>proof</i>: the orchestrator holds the keys to write on each
+    agent's behalf, so the guarantee is against an outside editor, not against a malicious orchestrator.)
     <br><b style="color:var(--ink)">Grounded, not just attested:</b> {grd['grounded']} of {grd['total_claims']}
     claims that point at an external artifact (a written page, a live deploy URL, a deterministic check
-    result) were verified to actually have one. The hash chain proves no decision was altered; grounding
-    proves no agent claimed an artifact it never produced. ({grd['attested']} internal decisions carry no
-    external artifact and are attested by author + hash only.)
+    result) were verified to actually have one. The chain proves no row was altered; signing proves who
+    wrote it; grounding proves no agent claimed an artifact it never produced. ({grd['attested']} internal
+    decisions carry no external artifact.)
   </div>
 </div></body></html>"""
 

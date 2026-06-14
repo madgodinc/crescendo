@@ -14,6 +14,8 @@ Run: uv run python maestro.py "your brief here"
 import asyncio
 import hashlib
 import os
+
+from signing import sign_event
 import re
 import sys
 from datetime import datetime, timezone
@@ -144,10 +146,14 @@ class Maestro:
         return int(len(reply) / 4 * 2.2) if reply else 0
 
     def record(self, actor: str, kind: str, text: str, meta: dict | None = None) -> None:
-        """Append one event to the replay trail (rendered by the dashboard)."""
+        """Append one event to the replay trail (rendered by the dashboard).
+        Each event carries the author's HMAC so the trail proves not just that a
+        row wasn't edited (hash chain) but that its author can't be forged."""
+        ts = datetime.now(timezone.utc).isoformat()
+        text = text[:600]
         self.events.append({
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "actor": actor, "kind": kind, "text": text[:600], "meta": meta or {},
+            "ts": ts, "actor": actor, "kind": kind, "text": text,
+            "sig": sign_event(actor, kind, text, ts), "meta": meta or {},
         })
         # bound growth: every checkpoint + live-push re-serialises the whole list,
         # so cap it (a normal run is ~20 events; a pathological retry storm won't
