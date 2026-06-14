@@ -20,28 +20,57 @@ from band.core import SimpleAdapter
 
 
 class AutoReplyLangGraphAdapter(LangGraphAdapter):
-    """Guarantee the LLM's final text reaches the chat, even when the model
-    forgot to call band_send_message. Idempotent: skips if the model used tools."""
+    """Guarantee the LLM's final text reaches the chat even when the model
+    didn't call a send tool.
 
-    async def _handle_stream_event(self, event, room_id, tools) -> None:
-        await super()._handle_stream_event(event, room_id, tools)
-        if not isinstance(event, dict) or event.get("event") != "on_chat_model_end":
-            return
-        output = (event.get("data") or {}).get("output")
-        if getattr(output, "tool_calls", None):
-            return  # model already replied via a tool — no double-post
-        text = getattr(output, "content", "") or ""
-        if isinstance(text, list):
-            text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
-        text = (text or "").strip()
-        if not text:
-            return
-        # reply to Maestro (Band needs >=1 mention; the orchestrator is the addressee)
+    Band's base adapter relies on the model calling `band_send_message`; an agent
+    that replies with plain text (e.g. the Conductor, which has no other tools)
+    silently drops its answer. We wrap on_message: capture the final assistant
+    text and whether any tool was used during the turn; if no message was sent,
+    deliver the text ourselves via tools.send_message."""
+
+    async def on_message(self, msg, tools, history, participants_msg, contacts_msg,
+                         *, is_session_bootstrap, room_id):
+        sent = {"any": False}
+        final_text = {"v": ""}
+
+        # wrap send_message so we know if the model already replied
+        orig_send = tools.send_message
+
+        async def tracked_send(*a, **k):
+            sent["any"] = True
+            return await orig_send(*a, **k)
+        tools.send_message = tracked_send
+
+        # capture the last assistant text from the model-end stream events
+        orig_handle = self._handle_stream_event
+
+        async def capture(event, rid, t):
+            await orig_handle(event, rid, t)
+            if isinstance(event, dict) and event.get("event") == "on_chat_model_end":
+                out = (event.get("data") or {}).get("output")
+                if not getattr(out, "tool_calls", None):
+                    txt = getattr(out, "content", "") or ""
+                    if isinstance(txt, list):
+                        txt = "".join(b.get("text", "") for b in txt if isinstance(b, dict))
+                    if txt and txt.strip():
+                        final_text["v"] = txt.strip()
+        self._handle_stream_event = capture
         try:
-            await tools.send_message(content=text,
-                                     mentions=[os.environ["MAESTRO_AGENT_ID"]])
-        except Exception as e:
-            logging.getLogger("agents").warning("auto-reply failed: %s", e)
+            await super().on_message(msg, tools, history, participants_msg, contacts_msg,
+                                     is_session_bootstrap=is_session_bootstrap, room_id=room_id)
+        finally:
+            self._handle_stream_event = orig_handle
+            tools.send_message = orig_send
+
+        # fallback delivery: model produced text but never sent it
+        if not sent["any"] and final_text["v"]:
+            try:
+                await tracked_send(content=final_text["v"],
+                                   mentions=[os.environ["MAESTRO_AGENT_ID"]])
+                logging.getLogger("agents").info("AUTOREPLY delivered %d chars", len(final_text["v"]))
+            except Exception as e:
+                logging.getLogger("agents").warning("auto-reply failed: %s", e)
 
 from deploy_tools import build_author_tools, build_deploy_tools, build_review_tools
 from memory_tools import build_memory_tools
