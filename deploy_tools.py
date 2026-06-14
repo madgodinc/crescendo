@@ -114,6 +114,58 @@ def validate_site() -> list[str]:
     return problems
 
 
+async def _render_check(must_contain: str = "") -> dict:
+    """Headless-render the page and report what a browser actually sees: console
+    errors, JS page errors, visible text length, and whether an expected term is
+    present. Deterministic — turns review from an LLM opinion into a real test."""
+    index = os.path.join(WORKSPACE, "index.html")
+    if not os.path.isfile(index):
+        return {"ok": False, "errors": ["index.html missing"], "visible_chars": 0}
+    try:
+        from playwright.async_api import async_playwright
+    except Exception:
+        return {"ok": True, "errors": [], "note": "playwright unavailable; structural check only"}
+    console_errs, page_errs = [], []
+    try:
+        async with async_playwright() as p:
+            b = await p.chromium.launch()
+            pg = await b.new_page()
+            pg.on("console", lambda m: console_errs.append(m.text) if m.type == "error" else None)
+            pg.on("pageerror", lambda e: page_errs.append(str(e)))
+            await pg.goto("file://" + index, wait_until="networkidle", timeout=15000)
+            await pg.wait_for_timeout(400)
+            text = (await pg.inner_text("body")).strip()
+            present = (must_contain.lower() in (await pg.content()).lower()) if must_contain else True
+            await b.close()
+    except Exception as e:
+        return {"ok": False, "errors": [f"render failed: {e}"], "visible_chars": 0}
+    errs = [f"console error: {x}" for x in console_errs[:5]] + [f"JS error: {x}" for x in page_errs[:5]]
+    if len(text) < 30:
+        errs.append(f"renders almost blank ({len(text)} visible chars)")
+    if must_contain and not present:
+        errs.append(f"expected content '{must_contain}' not found in the page")
+    return {"ok": not errs, "errors": errs, "visible_chars": len(text)}
+
+
+async def _check_page(must_contain: str = "") -> str:
+    """Run the deterministic page check (structural gate + headless render) and
+    return a verdict string the reviewer can fold into its judgement."""
+    problems = validate_site()
+    render = await _render_check(must_contain)
+    all_errs = problems + render.get("errors", [])
+    if all_errs:
+        return "CHECK FAILED:\n- " + "\n- ".join(all_errs)
+    vc = render.get("visible_chars", 0)
+    note = render.get("note", "")
+    return f"CHECK PASSED: valid structure, renders cleanly ({vc} visible chars, no console/JS errors)." \
+           + (f" [{note}]" if note else "")
+
+
+class CheckArgs(BaseModel):
+    must_contain: str = Field(default="", description="Optional: a key word/phrase from "
+                              "the brief the page must actually contain (e.g. the product name).")
+
+
 class ReadArgs(BaseModel):
     path: str = Field(description="Relative file path to read, e.g. 'index.html'.")
 
@@ -197,8 +249,17 @@ def build_author_tools() -> list[StructuredTool]:
 
 
 def build_review_tools() -> list[StructuredTool]:
-    """For the Tuning Fork: read the page to review it."""
-    return _read_tools()
+    """For the Tuning Fork: read the page AND run a deterministic check on it."""
+    return _read_tools() + [
+        StructuredTool.from_function(
+            coroutine=_check_page, name="check_page", args_schema=CheckArgs,
+            description="Run a DETERMINISTIC check on the page: structural validation "
+                        "plus a headless browser render that reports console errors, JS "
+                        "errors, visible content, and whether an expected term is present. "
+                        "Call this before giving your verdict — base CLEAN/ISSUES on its result, "
+                        "not just on reading the code.",
+        ),
+    ]
 
 
 def build_deploy_tools() -> list[StructuredTool]:

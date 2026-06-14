@@ -123,11 +123,12 @@ ROSTER = {
         "shell is fixed for you. Build EXACTLY what the brief asks for, in English. Do NOT add a "
         "favicon or base64. Do NOT paste code in chat. After the tool returns, reply one line."),
     "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
-        REPLY_RULE + "You are the Tuning Fork — the critic. CALL list_files then read_file to read "
-        "the Soloist's code yourself — never expect it in chat. CHECK FIRST that the file is "
-        "complete and not truncated (must end with </html>); if truncated or empty, that's an "
-        "ISSUE. Then review correctness against the brief. Reply 'CLEAN' only if the file is whole "
-        "and works, else 'ISSUES: ...' with concrete fixes. Write the review in English."),
+        REPLY_RULE + "You are the Tuning Fork — the critic. FIRST call check_page (pass a key "
+        "term from the brief as must_contain) to RUN a deterministic check: structure + a headless "
+        "browser render reporting console/JS errors and visible content. If check_page reports "
+        "CHECK FAILED, those are ISSUES — list them. Then ALSO read the code (list_files, read_file) "
+        "and review correctness against the brief. Reply 'CLEAN' only if check_page PASSED and the "
+        "code is right, else 'ISSUES: ...' with concrete fixes. Write the review in English."),
     "Stage Tech": ("STAGE_TECH", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Stage Tech — the deployer. CALL deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
