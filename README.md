@@ -21,6 +21,19 @@ content + timestamp)`. Change any past decision and every hash after it breaks, 
 the trail is tamper-evident. You can replay who decided what and when, and verify
 nothing was edited after the fact. That is the Track-3 claim, made checkable.
 
+The chain proves no decision was *altered*. A second pass proves no agent *lied*:
+every entry that points at an external artifact (a written page, a live deploy
+URL, a deterministic check result) is verified to actually have one. The audit
+report shows a single number, `N/N grounded`, so the trail is tamper-evident and
+grounded: you can't change it after the fact, and an agent can't claim an artifact
+it never produced. The grounding pass is deterministic and report-only, so it adds
+no model and can't stall a run.
+
+High-stakes briefs add a human in the loop: when the Conductor's resource contract
+says a project needs real external access, the deploy waits for a human sign-off,
+and that approval is recorded in the trail. A benign brief ships with no friction.
+Proportional autonomy, the access granted once and the sign-off provable.
+
 mgi-mind is a Rust service bundled in this repo as a submodule. It runs its own
 store rather than wrapping a hosted vector DB, and it carries the audit chain, the
 skills the agents pull from, and the checkpoints that let a crashed run resume.
@@ -54,6 +67,28 @@ after the fact.
 
 Control flows Conductor → room → agent → room → Conductor. The coordination
 happens *through* Band, not around it.
+
+## Growing the orchestra
+
+The five are the core quintet; they play on every brief. Bigger or more regulated
+work plugs in specialist agents that attach to a phase: a Security Auditor or an
+Accessibility Checker on review, a Schema validator on planning, a Compliance gate
+on a Track-3 brief. The Conductor's resource contract decides which sections play,
+so a specialist joins only when the brief needs it.
+
+Two rules keep this honest, not agent-count theatre:
+
+- **The topology never changes.** Every specialist still reports only to the
+  Maestro, so adding agents can't break the star: nobody speaks out of turn no
+  matter how many sections play.
+- **A specialist must bring a deterministic check, not just a prompt.** It earns a
+  seat by running a real, citable verification (a headless render, an axe-core
+  accessibility scan, a dependency audit) whose result grounds in the audit trail.
+  An agent that only emits an opinion would put an ungrounded claim in the trail,
+  which is the one thing the grounding pass exists to catch. So it doesn't get a
+  seat.
+
+The quintet ships today. The sections are how it scales without diluting the proof.
 
 ## How Band does the work
 
@@ -160,6 +195,8 @@ opens the tamper-evident trail of every decision.
 - Star coordination with a control loop in code
 - Shared memory, every write attributed to its agent
 - A resource contract: the Conductor infers the access a brief needs before any work starts
+- A tamper-evident audit trail with a grounding pass: every claim of an artifact is verified to have one
+- Risk-gated human approval: a high-stakes brief waits for a recorded sign-off before it deploys
 - Self-learning: a deploy failure recalls a known fix, and a verified fix is learned for next time
 - The Stage Tech deploys to a live Cloudflare Pages URL and reports the real link
 - A live dashboard for the orchestra graph and the decision trail, served from memory
