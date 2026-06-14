@@ -28,3 +28,7 @@ replay/*.json
 
 # wrangler local cache
 .wrangler/
+
+# private planning docs (not for the public repo)
+CRESCENDO.md
+CRESCENDO-CONCEPT.md
