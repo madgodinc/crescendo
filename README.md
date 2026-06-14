@@ -4,23 +4,43 @@
 
 Crescendo takes one brief, plans it, builds it, reviews its own work, fixes the
 bugs it catches, and deploys a working product to a live URL. It writes every
-decision to an append-only audit trail you can open and verify.
+decision to a SHA-256 hash-chained audit trail. It is tamper-evident: no decision
+can be altered after the fact, and you can open it and verify the chain yourself.
 
 Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of-agents-hackathon)
 (June 12–19, 2026).
 
 **Live dashboard:** https://crescendo-dashboard.pages.dev · **Example shipped page:** https://b83e8f9c.crescendo-demo-5vj.pages.dev
 
-## Idea
+## Prove every decision
 
-Most agents work alone, locked inside one framework. Real work is collaborative:
-agents pass context, hand off tasks, bring in other agents, and stay accountable
-across a long-running process.
+Every agent writes to one shared memory ([mgi-mind](https://github.com/madgodinc/mgi-mind))
+with its own token, so every entry carries its author. The audit report chains
+those entries: each row's hash is `SHA-256(previous_hash + agent + action +
+content + timestamp)`. Change any past decision and every hash after it breaks, so
+the trail is tamper-evident. You can replay who decided what and when, and verify
+nothing was edited after the fact. That is the Track-3 claim, made checkable.
 
-Crescendo is a small team of specialized agents that coordinate through
-[Band](https://band.ai). Band is the visible coordination layer: rooms, @mention
-routing, handoffs, shared state. Every decision an agent makes is attributable to
-a specific author and provable after the fact.
+mgi-mind is a Rust service bundled in this repo as a submodule. It runs its own
+store rather than wrapping a hosted vector DB, and it carries the audit chain, the
+skills the agents pull from, and the checkpoints that let a crashed run resume.
+
+## The flywheel
+
+Crescendo gets cheaper and more accurate the longer it runs. A deploy failure is
+reduced to a stable signature; the Archivist recalls whether memory already solved
+that failure class and feeds the fix to the Soloist; a fix that then passes is
+learned back as a verified procedure. Next run recalls it instead of rediscovering
+it. The Archivist also pulls only the *relevant* context for each step rather than
+the full window, so longer projects stay coherent on fewer tokens.
+
+## Why this is different
+
+Most multi-agent demos print text and stop. Crescendo ships a working product to a
+live URL, then proves how it got there. It coordinates through
+[Band](https://band.ai), the visible layer of rooms, `@mention` routing, handoffs,
+and shared state, so every step is attributable to a specific author and provable
+after the fact.
 
 ## The agents
 
@@ -34,6 +54,23 @@ a specific author and provable after the fact.
 
 Control flows Conductor → room → agent → room → Conductor. The coordination
 happens *through* Band, not around it.
+
+## How Band does the work
+
+Crescendo runs as a star: every step goes through the Maestro, so two agents never
+ping-pong forever, the failure that kills most multi-agent demos. Band is the
+visible coordination layer, not a pipe behind the orchestrator. Every handoff runs
+through real Band primitives:
+
+- **One shared room** holds the whole run; agents are pulled in as participants.
+- **`@mention` routing** drives each step: the Maestro addresses exactly one
+  agent per turn (`mentions=[...]`), and a `GatedAdapter` makes a worker act only
+  when it's the one mentioned, so nobody speaks out of turn.
+- **Replies land back in the room**; the Maestro reads them by `sender_id` since a
+  timestamp. An `AutoReplyLangGraphAdapter` guarantees an agent's plain-text reply
+  reaches the room even when the model forgets to call the send tool.
+- **A control loop in code** is the safety net under the prompts: it ignores system
+  events, lets an agent act only when mentioned, and stops a run that runs too long.
 
 ## Architecture
 
@@ -61,63 +98,22 @@ flowchart TD
 Solid lines are control flow through Band; dotted lines are the Archivist feeding
 skills and recalled fixes straight to the worker that needs them.
 
-## How Band does the work
-
-Band is the visible coordination layer, not a pipe behind the orchestrator. Every
-handoff runs through real Band primitives:
-
-- **One shared room** holds the whole run; agents are pulled in as participants.
-- **`@mention` routing** drives each step — the Maestro addresses exactly one
-  agent per turn (`mentions=[...]`), and a `GatedAdapter` makes a worker act only
-  when it's the one mentioned, so nobody speaks out of turn.
-- **Replies land back in the room**; the Maestro reads them by `sender_id` since a
-  timestamp. An `AutoReplyLangGraphAdapter` guarantees an agent's plain-text reply
-  reaches the room even when the model forgets to call the send tool.
-- The star topology (everything through the Maestro) makes the classic
-  agents-ping-pong-forever failure impossible.
-
-## How coordination works
-
-Crescendo runs as a star. Every agent reports to the Conductor and waits until the
-Conductor hands it the turn. The Conductor holds the plan, picks the next step,
-caps review rounds, and calls the work done. Most multi-agent demos die when two
-agents ping-pong forever. The star stops that, because nobody speaks out of turn.
-
-A control loop in code backs up the prompts. It ignores system events, lets an
-agent act only when something @mentions it, and stops a run that runs too long.
-The Conductor's judgement does the work; the control loop is the safety net.
-
-## The flywheel
-
-Crescendo gets cheaper, more accurate, and faster the longer it runs. When an
-agent hits an error and finds a fix, the Archivist writes that fix to memory. Next
-time the same class of problem appears, an agent recalls the fix instead of
-rediscovering it. The Archivist also pulls only the *relevant* context for each
-step instead of carrying the full window, so runs use fewer tokens and stay
-coherent over longer projects.
-
-## Memory and the audit trail
-
-Agents share one memory ([mgi-mind](https://github.com/madgodinc/mgi-mind)) over
-HTTP. Each agent writes with its own token, so every entry carries its author. The
-dashboard reads that trail, so you can replay who decided what and when.
-
 ## Run it
 
 Pick the path that fits how far you want to go. Crescendo needs its brain
 ([mgi-mind](https://github.com/madgodinc/mgi-mind)) for memory, the audit trail,
-skills, and crash-resume — the brain is bundled here as a submodule so it comes
+skills, and crash-resume. The brain is bundled here as a submodule, so it comes
 along with a clone.
 
 ### 1. Just look (zero setup)
 
-Open the live dashboard — a recorded run with its full decision trail, audit
+Open the live dashboard, a recorded run with its full decision trail, audit
 report, and learned-fixes view:
 
 **→ https://crescendo-dashboard.pages.dev**
 
 Or, after cloning, double-click `dashboard/index.html`. The recorded run is
-embedded, so it works straight off the filesystem — no server, no keys.
+embedded, so it works straight off the filesystem with no server and no keys.
 
 ### 2. Run the engine (Docker, one command)
 
@@ -140,7 +136,7 @@ docker compose -f docker-compose.yml -f docker-compose.image.yml up
 
 ### 3. Drive the live orchestra (bring your own keys)
 
-The engine is here; the fuel is yours — five [Band](https://band.ai) agents, an LLM
+The engine is here; the fuel is yours: five [Band](https://band.ai) agents, an LLM
 key (Featherless or AI/ML API), and a Cloudflare account for the deploy. Copy the
 template and fill it in:
 
@@ -171,4 +167,4 @@ opens the tamper-evident trail of every decision.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
