@@ -123,10 +123,15 @@
   .rail { position:absolute; left:24px; bottom:22px; display:flex; gap:10px;
           padding:10px 14px; border-radius:14px; background:var(--panel);
           border:1px solid var(--line); backdrop-filter:blur(10px); }
-  .rail .ph { display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--dim);
-              font-weight:600; }
-  .rail .ph .ring { width:13px; height:13px; border-radius:50%; border:2px solid var(--dim);
+  .rail .ph { display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto;
+              column-gap:7px; align-items:center; font-size:11.5px; color:var(--dim); font-weight:600; }
+  .rail .ph .ring { grid-row:1/3; width:13px; height:13px; border-radius:50%; border:2px solid var(--dim);
                     position:relative; transition:.3s; }
+  .rail .ph .phl { grid-column:2; }
+  .rail .ph .phm { grid-column:2; display:flex; gap:7px; font-size:10px; font-weight:500;
+                   font-family:var(--mono); min-height:12px; }
+  .rail .ph .phm .t { color:var(--ink); opacity:.85; }
+  .rail .ph .phm .k { color:var(--archivist); }
   .rail .ph.active { color:var(--ink); }
   .rail .ph.active .ring { border-color:var(--maestro); box-shadow:0 0 12px var(--maestro);
                            animation:pulse 1.2s ease-in-out infinite; }
@@ -134,6 +139,9 @@
   .rail .ph.done .ring { border-color:var(--soloist); background:var(--soloist); box-shadow:0 0 10px rgba(79,224,168,.6); }
   .rail .sep { width:16px; height:2px; align-self:center; background:var(--line); border-radius:2px; }
   @keyframes pulse { 50% { transform:scale(1.25); } }
+  .tokchip { font-family:var(--mono); font-size:11px; color:var(--archivist); padding:4px 11px;
+             border:1px solid rgba(184,155,255,.4); border-radius:20px; background:rgba(184,155,255,.08);
+             white-space:nowrap; transition:opacity .3s; }
 
   /* right column: decision trail + runs */
   .side { border-left:1px solid var(--line); background:linear-gradient(180deg, rgba(10,14,26,.5), rgba(6,8,15,.5));
@@ -196,6 +204,7 @@
   <header>
     <div class="logo">Cre<span class="c">scendo</span><span class="sub">orchestra of AI agents</span></div>
     <div class="brief" id="brief"></div>
+    <div class="tokchip" id="tokTotal" style="opacity:0"></div>
     <div class="pill idle" id="status"><span class="led"></span><span id="statusText">idle</span></div>
   </header>
 
@@ -235,10 +244,41 @@ const DEFAULT_AGENTS = [
 ];
 const PHASES = ['rider','plan','code-review','deploy','archive'];
 const PHASE_LABEL = { rider:'Rider', plan:'Plan', 'code-review':'Code ↔ Review', deploy:'Deploy', archive:'Archive' };
+// which event kinds belong to which phase (for timing + token rollup)
+const EVENT_PHASE = { brief:'rider', rider:'rider', plan:'plan',
+  skills:'code-review', code:'code-review', review:'code-review', recall:'deploy',
+  learn:'deploy', deploy:'deploy', archive:'archive' };
+const fmtDur = s => s<60 ? `${s.toFixed(1)}s` : `${Math.floor(s/60)}m${String(Math.round(s%60)).padStart(2,'0')}s`;
+const fmtTok = t => t>=1000 ? `${(t/1000).toFixed(1)}k` : `${t}`;
+
+// roll the timeline up into per-phase {duration, tokens}; duration = span from a
+// phase's first event to the next phase's first event (or now, if it's running).
+function phaseStats(timeline, status) {
+  const stat = {}; PHASES.forEach(p => stat[p] = { t0:null, t1:null, tokens:0 });
+  let total = 0;
+  for (const e of timeline) {
+    const ph = EVENT_PHASE[e.kind]; if (!ph) continue;
+    const ms = Date.parse(e.ts);
+    if (stat[ph].t0 == null || ms < stat[ph].t0) stat[ph].t0 = ms;
+    if (stat[ph].t1 == null || ms > stat[ph].t1) stat[ph].t1 = ms;
+    const tk = (e.meta && e.meta.tokens) || 0; stat[ph].tokens += tk; total += tk;
+  }
+  // duration: from this phase's start to the NEXT phase's start (cleaner than
+  // first→last within a phase, which misses the wait for the next agent).
+  const starts = PHASES.map(p => stat[p].t0);
+  PHASES.forEach((p,i) => {
+    const s = stat[p]; if (s.t0 == null) { s.dur = null; return; }
+    let end = null;
+    for (let j=i+1;j<PHASES.length;j++){ if (starts[j]!=null){ end = starts[j]; break; } }
+    if (end == null) end = (status==='running') ? Date.now() : s.t1;
+    s.dur = Math.max(0, (end - s.t0)/1000);
+  });
+  return { stat, total };
+}
 const fmt = ts => ts ? ts.slice(11,19) : '';
 const el = id => document.getElementById(id);
 
-let timeline = [], rendered = 0, curRunId = null, selectedRun = null, curPhase = 'rider';
+let timeline = [], rendered = 0, curRunId = null, selectedRun = null, curPhase = 'rider', curStatus = 'idle';
 
 // Fallback unicode glyph (only used if an id has no custom icon).
 const GLYPH = { maestro:'◆', conductor:'▲', soloist:'♪', tuningfork:'◈',
@@ -595,23 +635,30 @@ const Graph = (() => {
 // ── phase rail ──────────────────────────────────────────────────────────────
 function renderRail(phase, status) {
   const box = el('rail');
-  // Build the DOM once; afterwards only mutate classes, so the active-phase
-  // ring pulse runs continuously instead of restarting every 1.5s poll.
   if (!box.children.length) {
     PHASES.forEach((p,i) => {
       if (i) { const s=document.createElement('div'); s.className='sep'; box.appendChild(s); }
       const d=document.createElement('div'); d.dataset.ph=p;
-      d.innerHTML = `<span class="ring"></span>${PHASE_LABEL[p]}`;
+      d.innerHTML = `<span class="ring"></span><span class="phl">${PHASE_LABEL[p]}</span>`+
+                    `<span class="phm" data-m="${p}"></span>`;
       box.appendChild(d);
     });
   }
   const idx = PHASES.indexOf(phase);
-  box.querySelectorAll('.ph,[data-ph]').forEach(d => {
+  const { stat, total } = phaseStats(timeline, status);
+  box.querySelectorAll('[data-ph]').forEach(d => {
     const p = d.dataset.ph; if (!p) return;
     const i = PHASES.indexOf(p);
     const st = (status==='done' || i<idx) ? 'done' : (p===phase && status==='running' ? 'active' : '');
     d.className = 'ph ' + st;
+    const s = stat[p], m = d.querySelector('.phm');
+    if (m) m.innerHTML = (s && s.dur != null)
+      ? `<span class="t">${fmtDur(s.dur)}</span>` + (s.tokens ? `<span class="k">${fmtTok(s.tokens)} tok</span>` : '')
+      : '';
   });
+  // header total-tokens chip
+  const tt = el('tokTotal');
+  if (tt) { tt.textContent = total ? `${fmtTok(total)} tokens` : ''; tt.style.opacity = total?1:0; }
 }
 
 // ── decision trail ──────────────────────────────────────────────────────────
@@ -689,6 +736,7 @@ function showShipped(text) {
 }
 
 function setStatus(status, phase) {
+  curStatus = status || 'idle'; if (phase) curPhase = phase;
   const p = el('status'); p.className = 'pill ' + (status || 'idle');
   el('statusText').innerHTML = (status||'idle') +
     ((phase && phase!=='done' && status==='running') ? ` <span class="phase">· ${PHASE_LABEL[phase]||phase}</span>` : '');
@@ -763,6 +811,8 @@ async function boot() {
     await refreshRuns();
     setInterval(pollLive, 1500);
     setInterval(refreshRuns, 10000);
+    // tick the live phase timers every second (smooth count-up while running)
+    setInterval(() => { if (curStatus==='running') renderRail(curPhase, 'running'); }, 1000);
   } else {
     const data = await fetch('replay.json').then(r=>r.json()).catch(()=>null);
     if (!data) { el('feed').innerHTML='<div class="ev"><div class="txt">No data — run serve.py (live) or maestro.py.</div></div>'; return; }

@@ -195,6 +195,35 @@ async def load_checkpoint(token: str, run_id: str) -> dict | None:
 # CRESCENDO_ACTIVE holding the current run id and a capped history list.
 _LIVE_MARKER = "CRESCENDO_LIVE"
 _ACTIVE_KEY = "CRESCENDO_ACTIVE"
+_TOK_MARKER = "CRESCENDO_TOK"   # per-agent running token total (each agent owns its key)
+
+
+async def set_token_total(token: str, agent: str, total: int) -> bool:
+    """Publish an agent's running token total to its OWN KV key (no cross-agent
+    race — each agent only writes its own). Maestro reads the delta per turn."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"{MGIMIND_URL}/kv/set", headers=headers,
+                             json={"key": f"{_TOK_MARKER}:{agent}", "value": int(total)})
+            r.raise_for_status()
+            return True
+    except Exception:
+        return False
+
+
+async def get_token_total(token: str, agent: str) -> int:
+    """Read an agent's running token total (0 if none yet)."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"{MGIMIND_URL}/kv/get", headers=headers,
+                             json={"key": f"{_TOK_MARKER}:{agent}"})
+            r.raise_for_status()
+            data = r.json()
+        return int(data.get("value") or 0) if data.get("found") else 0
+    except Exception:
+        return 0
 
 
 async def save_live(token: str, run_id: str, doc: dict) -> bool:

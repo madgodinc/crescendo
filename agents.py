@@ -134,20 +134,60 @@ ROSTER = {
 }
 
 
-def _llm(spec):
+class TokenTrackingChatOpenAI(ChatOpenAI):
+    """ChatOpenAI that records token usage at the LLM boundary (framework-
+    agnostic — works no matter how Band routes events). After each generation it
+    adds the turn's total_tokens to a running per-agent counter and publishes it
+    to mgi-mind so the dashboard can show real tokens per phase."""
+    agent_name: str = "agent"
+    mind_token: str = ""
+
+    def _bump(self, result):
+        try:
+            gens = getattr(result, "generations", None) or []
+            msg = gens[0].message if gens else None
+            usage = getattr(msg, "usage_metadata", None) if msg else None
+            tot = int((usage or {}).get("total_tokens") or 0)
+            if tot and self.mind_token:
+                _TOK_RUNNING[self.agent_name] = _TOK_RUNNING.get(self.agent_name, 0) + tot
+                from memory_tools import set_token_total
+                asyncio.create_task(set_token_total(self.mind_token, self.agent_name,
+                                                    _TOK_RUNNING[self.agent_name]))
+        except Exception:
+            pass
+
+    async def _agenerate(self, *a, **k):
+        result = await super()._agenerate(*a, **k)
+        self._bump(result)
+        return result
+
+    def _generate(self, *a, **k):
+        result = super()._generate(*a, **k)
+        self._bump(result)
+        return result
+
+
+_TOK_RUNNING: dict[str, int] = {}   # per-agent running total this process
+
+
+def _llm(spec, agent_name="agent", mind_token=""):
     """One chat model with a bounded timeout and NO internal retries — retrying is
     delegated to .with_fallbacks() (the other provider) and maestro's ask() retry.
-    With max_retries=2 the worst case was 90s×3×2 providers ≫ REPLY_TIMEOUT and
-    aborted runs; this keeps it to primary 70s + fallback 70s ≈ 140s < 200s."""
+    Tracks token usage per agent for the dashboard."""
     (base_url, api_key), model = spec
-    return ChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                      temperature=0, max_tokens=8192, timeout=70, max_retries=0)
+    return TokenTrackingChatOpenAI(model=model, base_url=base_url, api_key=api_key,
+                      temperature=0, max_tokens=8192, timeout=70, max_retries=0,
+                      agent_name=agent_name, mind_token=mind_token)
 
 
 def build(prefix, primary, fallback, role) -> Agent:
-    # primary with a fallback model — survives a provider outage transparently
-    llm = _llm(primary).with_fallbacks([_llm(fallback)])
-    tools = build_memory_tools(os.environ[f"MGIMIND_TOKEN_{prefix}"])
+    # actor id used in the dashboard timeline (CONDUCTOR -> conductor, TUNING_FORK -> tuningfork)
+    actor = prefix.lower().replace("_", "")
+    mtok = os.environ[f"MGIMIND_TOKEN_{prefix}"]
+    # primary with a fallback model — survives a provider outage transparently;
+    # both track tokens to the same per-agent counter.
+    llm = _llm(primary, actor, mtok).with_fallbacks([_llm(fallback, actor, mtok)])
+    tools = build_memory_tools(mtok)
     if prefix == "STAGE_TECH":
         tools = tools + build_deploy_tools()          # read + deploy (with validate gate)
     elif prefix == "SOLOIST":
