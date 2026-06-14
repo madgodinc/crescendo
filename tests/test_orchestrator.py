@@ -52,6 +52,21 @@ class TestIsClean:
         # "CLEAN ... but there is an ISSUE" must NOT pass
         assert Maestro._is_clean("CLEAN - although there is a minor ISSUE with spacing") is False
 
+    def test_adjacent_negated_negatives_are_clean(self):
+        # regression: a reviewer confirming a page is fine writes the negative
+        # right next to NO ("no truncation", "no broken links") — these are
+        # POSITIVE and must read as clean, or the review loop spins to max rounds
+        # and ships a clean page as "shipped-with-issues".
+        assert Maestro._is_clean(
+            "CLEAN\n\nThe page is complete:\n- Ends with </html>, no truncation.\n"
+            "- The Start button works correctly.") is True
+        assert Maestro._is_clean("CLEAN, no broken links, no missing fonts. LGTM") is True
+        assert Maestro._is_clean("CLEAN — not broken, nothing incomplete") is True
+
+    def test_truncated_page_still_blocks(self):
+        # but a REAL truncation (not negated) must still block
+        assert Maestro._is_clean("the file is truncated, does not end with </html>") is False
+
 
 class TestCountIssues:
     def test_clean_review_counts_zero(self):

@@ -298,6 +298,14 @@ class Maestro:
         for attempt in range(2, MAX_WRITE_TRIES + 1):
             if self._site_mtime() > before:
                 return summary   # the file was (re)written — that's the real signal
+            # The file wasn't rewritten THIS round. That's only a failure if no
+            # valid page exists at all (the first write never landed). On a later
+            # round, a Soloist that judges the page already correct legitimately
+            # doesn't rewrite — insisting then just spins the loop to max rounds.
+            # So only insist when there's no shippable file; otherwise accept it.
+            if before > 0 and not validate_site():
+                log("write", "soloist didn't rewrite, but a valid page already exists — accepting")
+                return summary
             log("write", f"soloist did not write the file (attempt {attempt-1}); insisting")
             self.record("soloist", "code",
                         "⟳ no file written — asking the Soloist to actually call write_page",
@@ -337,10 +345,15 @@ class Maestro:
     _NEG = re.compile(r"\b(ISSUES?|PROBLEMS?|BUGS?|BROKEN|MISSING|TRUNCAT\w*|"
                       r"INCOMPLETE|SHOULD FIX|NEEDS? FIX|CONCERNS?|ERRORS?|"
                       r"FAIL\w*|NOT WORK\w*)\b", re.I)
-    # "no problems", "without bugs", "zero issues", "nothing missing" — a NEGATED
-    # negative is actually positive, so strip these before scanning.
-    _NEGATED = re.compile(r"\b(NO|ZERO|WITHOUT|NOTHING)\s+\w*\s*"
-                          r"(ISSUES?|PROBLEMS?|BUGS?|ERRORS?|CONCERNS?|MISSING)\b", re.I)
+    # "no problems", "without bugs", "zero issues", "nothing missing", and the
+    # adjacent forms a reviewer uses while confirming a page is fine ("no
+    # truncation", "no broken links", "no missing fonts") — a NEGATED negative is
+    # actually positive, so strip these before scanning. The optional middle word
+    # must NOT be greedy enough to swallow the negative itself, so it's an
+    # explicit "(word )?" rather than "\w*".
+    _NEGATED = re.compile(r"\b(NO|ZERO|WITHOUT|NOTHING|NOT)\s+(?:\w+\s+)?"
+                          r"(ISSUES?|PROBLEMS?|BUGS?|ERRORS?|CONCERNS?|MISSING|"
+                          r"TRUNCAT\w*|BROKEN|INCOMPLETE|FAIL\w*)\b", re.I)
 
     @classmethod
     def _is_clean(cls, review: str) -> bool:
