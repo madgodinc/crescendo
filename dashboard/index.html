@@ -240,12 +240,49 @@ const el = id => document.getElementById(id);
 
 let timeline = [], rendered = 0, curRunId = null, selectedRun = null, curPhase = 'rider';
 
-// glyph per agent — a coherent MONOCHROME set (no emoji-presentation chars like
-// ⚖/⚙ that render color on mac, no obscure ⤳ that tofus on Windows).
+// Fallback unicode glyph (only used if an id has no custom icon).
 const GLYPH = { maestro:'◆', conductor:'▲', soloist:'♪', tuningfork:'◈',
                 stagetech:'▣', archivist:'✦', human:'●' };
 // canvas ctx.font cannot resolve CSS var(); use the literal family names.
 const FONT_UI = "'Space Grotesk',system-ui,sans-serif";
+
+// Custom vector icons, one per role, drawn on canvas (resolution-independent,
+// no font/emoji dependency). Each draws inside a box of half-size `s` at (x,y).
+// col = stroke/fill colour, a = alpha.
+function drawIcon(ctx, id, x, y, s, col, a) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.strokeStyle = `rgba(${col},${a})`; ctx.fillStyle = `rgba(${col},${a})`;
+  ctx.lineWidth = Math.max(1.4, s*0.13); ctx.lineCap='round'; ctx.lineJoin='round';
+  const P = (pts, close) => { ctx.beginPath(); pts.forEach(([px,py],i)=> i?ctx.lineTo(px*s,py*s):ctx.moveTo(px*s,py*s)); if(close)ctx.closePath(); };
+  if (id==='maestro') {                 // conductor's baton with motion arcs (a star core)
+    ctx.beginPath(); for(let i=0;i<8;i++){const an=i*Math.PI/4, rr=i%2?0.32:0.78; ctx[i?'lineTo':'moveTo'](Math.cos(an)*rr*s,Math.sin(an)*rr*s);} ctx.closePath(); ctx.fill();
+  } else if (id==='conductor') {         // baton + a conducted arc (routes the work)
+    P([[-0.6,0.55],[0.5,-0.55]]); ctx.stroke();           // baton
+    ctx.beginPath(); ctx.arc(0.18*s,0.18*s, 0.5*s, -1.1, 0.5); ctx.stroke();  // sweep
+    ctx.beginPath(); ctx.arc(0.5*s,-0.55*s, 0.1*s, 0, 7); ctx.fill();          // tip
+  } else if (id==='soloist') {           // code brackets </>
+    P([[-0.2,-0.6],[-0.7,0],[-0.2,0.6]]); ctx.stroke();
+    P([[0.2,-0.6],[0.7,0],[0.2,0.6]]); ctx.stroke();
+    P([[0.12,-0.62],[-0.12,0.62]]); ctx.stroke();
+  } else if (id==='tuningfork') {        // tuning fork (the critic)
+    P([[-0.4,-0.7],[-0.4,0.0]]); ctx.stroke();
+    P([[0.4,-0.7],[0.4,0.0]]); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,0, 0.4*s, 0, Math.PI); ctx.stroke();            // U-bend
+    P([[0,0.4],[0,0.78]]); ctx.stroke();                  // stem
+  } else if (id==='stagetech') {         // rocket (deploys / ships)
+    P([[0,-0.78],[0.34,0.1],[0.34,0.42],[-0.34,0.42],[-0.34,0.1]], true); ctx.stroke();  // body
+    ctx.beginPath(); ctx.arc(0,-0.12*s, 0.13*s, 0, 7); ctx.stroke();          // window
+    P([[-0.34,0.25],[-0.62,0.6],[-0.18,0.42]]); ctx.stroke();                 // fin L
+    P([[0.34,0.25],[0.62,0.6],[0.18,0.42]]); ctx.stroke();                    // fin R
+  } else if (id==='archivist') {         // stacked memory layers (the brain/store)
+    for (let i=-1;i<=1;i++){ ctx.beginPath(); ctx.ellipse(0, i*0.32*s, 0.62*s, 0.2*s, 0, 0, 7); ctx.stroke(); }
+  } else {                               // human / fallback — a simple ring
+    ctx.beginPath(); ctx.arc(0,0, 0.5*s, 0, 7); ctx.stroke();
+  }
+  ctx.restore();
+}
+// "r,g,b" string for an agent (icons need rgb components for alpha control)
+const RGB = id => { const c=COLOR[id]||'#cccccc'; const n=parseInt(c.slice(1),16); return `${n>>16&255},${n>>8&255},${n&255}`; };
 
 // ── canvas graph engine ─────────────────────────────────────────────────────
 const TAU = Math.PI*2;
@@ -488,11 +525,11 @@ const Graph = (() => {
           ctx.lineWidth=1.4; ctx.stroke(); ctx.setLineDash([]); ctx.restore();
         }
       }
-      // glyph
-      ctx.fillStyle = hex('#ffffff', 0.95);
-      ctx.font = `${Math.round(r*0.6)}px ${FONT_UI}`;
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText(GLYPH[n.id]||'●', n.x, n.y+1);
+      // custom vector icon (white core, faint coloured glow underneath)
+      ctx.globalCompositeOperation = 'lighter';
+      drawIcon(ctx, n.id, n.x, n.y, r*0.52, RGB(n.id), 0.5+n.glow*0.4);
+      ctx.globalCompositeOperation = 'source-over';
+      drawIcon(ctx, n.id, n.x, n.y, r*0.5, '255,255,255', 0.92);
       // label radially outward, dark halo
       const lx = isHub ? n.x : n.x + Math.cos(n.ang)*(r+16);
       const ly = isHub ? n.y + r + 18 : n.y + Math.sin(n.ang)*(r+16);
