@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Crescendo · orchestra of AI agents</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+  :root { --ui:'Space Grotesk',ui-sans-serif,system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace; }
   :root {
     --bg:#06080f; --bg2:#0a0e1a; --panel:rgba(16,22,38,.72); --line:rgba(120,140,200,.14);
     --ink:#eaf0ff; --dim:#7e8aa8;
@@ -21,8 +25,17 @@
       radial-gradient(1000px 600px at 100% 110%, rgba(184,155,255,.10), transparent 60%),
       var(--bg);
     color:var(--ink); overflow:hidden;
-    font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
+    font:14px/1.5 var(--ui);
     -webkit-font-smoothing:antialiased;
+  }
+  code, .mono, .ev .ts, .count, .run .rid { font-family:var(--mono); }
+  /* scanlines + vignette — sci-fi atmosphere, near-free */
+  body::after {
+    content:""; position:fixed; inset:0; z-index:50; pointer-events:none;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,.16) 0, rgba(0,0,0,.16) 1px, transparent 2px, transparent 3px),
+      radial-gradient(130% 110% at 50% 45%, transparent 55%, rgba(0,0,0,.45) 100%);
+    mix-blend-mode:multiply; opacity:.5;
   }
   /* faint moving grid backdrop */
   body::before {
@@ -43,8 +56,10 @@
            padding:16px 26px; border-bottom:1px solid var(--line);
            background:linear-gradient(180deg, rgba(10,14,26,.6), transparent); }
   .logo { font-size:20px; font-weight:800; letter-spacing:.2px; white-space:nowrap; }
-  .logo .c { background:linear-gradient(90deg,#ffcf5a,#ff9a5a); -webkit-background-clip:text;
-             background-clip:text; color:transparent; }
+  .logo .c { background:linear-gradient(90deg,#ffcf5a,#ff9a5a,#ffcf5a); background-size:200% auto;
+             -webkit-background-clip:text; background-clip:text; color:transparent;
+             animation:shimmer 6s linear infinite; }
+  @keyframes shimmer { to { background-position:200% center; } }
   .logo .sub { font-weight:500; color:var(--dim); font-size:12px; margin-left:8px; }
   .brief { color:var(--ink); font-size:13.5px; opacity:.9; overflow:hidden;
            text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
@@ -67,6 +82,21 @@
   /* stage = canvas graph */
   .stage { position:relative; overflow:hidden; }
   #graph { position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+  /* "NOW" hero — what the orchestra is doing this instant */
+  .now { position:absolute; top:20px; left:50%; transform:translateX(-50%);
+         display:flex; align-items:center; gap:11px; padding:9px 18px; border-radius:30px;
+         background:rgba(16,22,38,.7); border:1px solid var(--line); backdrop-filter:blur(10px);
+         font-size:13.5px; white-space:nowrap; max-width:80%; transition:.3s; opacity:0; }
+  .now.show { opacity:1; }
+  .now .glyph { font-size:16px; }
+  .now .who { font-weight:700; color:var(--now,#fff); }
+  .now .verb { color:var(--dim); }
+  .now .wave { display:flex; gap:3px; align-items:flex-end; height:14px; margin-left:2px; }
+  .now .wave i { width:3px; background:var(--now,#fff); border-radius:2px; animation:eq 1s ease-in-out infinite; }
+  .now .wave i:nth-child(2){ animation-delay:.15s } .now .wave i:nth-child(3){ animation-delay:.3s }
+  .now .wave i:nth-child(4){ animation-delay:.45s }
+  @keyframes eq { 0%,100%{ height:4px } 50%{ height:14px } }
 
   /* phase rail bottom-left over the canvas */
   .rail { position:absolute; left:24px; bottom:22px; display:flex; gap:10px;
@@ -104,9 +134,12 @@
   .ev .ts { margin-left:auto; color:var(--dim); font-size:10.5px; font-variant-numeric:tabular-nums; }
   .ev .txt { margin-top:6px; color:#cdd6ee; font-size:12.5px; white-space:pre-wrap; word-break:break-word; }
   .ev .txt a { color:var(--soloist); font-weight:700; text-decoration:none; border-bottom:1px solid rgba(79,224,168,.4); }
+  .ev .glyph { font-size:13px; }
   .ev.skills, .ev.recall, .ev.learn { background:rgba(184,155,255,.07); }
   .ev.rider { background:rgba(255,207,90,.06); }
-  .ev.deploy { background:rgba(79,224,168,.07); }
+  .ev.deploy { background:rgba(79,224,168,.10); border-color:rgba(79,224,168,.4);
+               box-shadow:0 0 24px rgba(79,224,168,.12) inset; }
+  .ev.deploy .kind { color:var(--soloist); border-color:rgba(79,224,168,.5); }
 
   .runs { border-top:1px solid var(--line); padding:12px 14px; display:flex; flex-direction:column; gap:7px;
           max-height:34vh; overflow-y:auto; }
@@ -129,6 +162,12 @@
   button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
   button.ghost:hover { border-color:rgba(120,140,200,.4); box-shadow:none; }
   .count { color:var(--dim); font-size:11.5px; margin-left:auto; font-variant-numeric:tabular-nums; }
+
+  @media (max-width:1040px) {
+    .app { grid-template-columns:1fr; grid-template-rows:auto 56vh 1fr; }
+    .side { border-left:0; border-top:1px solid var(--line); }
+    .now { max-width:92%; }
+  }
 </style>
 </head>
 <body>
@@ -141,6 +180,7 @@
 
   <div class="stage">
     <canvas id="graph"></canvas>
+    <div class="now" id="now"></div>
     <div class="rail" id="rail"></div>
   </div>
 
@@ -174,10 +214,14 @@ const el = id => document.getElementById(id);
 
 let timeline = [], rendered = 0, curRunId = null, selectedRun = null, curPhase = 'rider';
 
+// glyph per agent — recognisable shape, drawn in node core and feed rows
+const GLYPH = { maestro:'❖', conductor:'⤳', soloist:'♪', tuningfork:'⚖',
+                stagetech:'⚙', archivist:'❀', human:'☉' };
+
 // ── canvas graph engine ─────────────────────────────────────────────────────
 const Graph = (() => {
   const cvs = el('graph'), ctx = cvs.getContext('2d');
-  let W=0, H=0, DPR=1, nodes=[], edges={}, particles=[], t=0;
+  let W=0, H=0, DPR=1, nodes=[], edges={}, particles=[], last=0, intro=0;
 
   function resize() {
     DPR = Math.min(window.devicePixelRatio||1, 2);
@@ -187,123 +231,151 @@ const Graph = (() => {
     layout();
   }
   function layout() {
-    const cx=W/2, cy=H/2, R=Math.min(W,H)*0.32;
-    nodes.forEach((n,i) => {
-      if (n.id==='maestro') { n.x=cx; n.y=cy; n.r=42; }
+    const cx=W/2, cy=H/2, R=Math.min(W, H-70)*0.34;   // reserve bottom for the rail
+    const spokes = nodes.filter(m=>m.id!=='maestro');
+    nodes.forEach(n => {
+      if (n.id==='maestro') { n.x=cx; n.y=cy; n.r=Math.max(40, R*0.30); }
       else {
-        const k = nodes.filter(m=>m.id!=='maestro').indexOf(n);
-        const cnt = nodes.length-1;
+        const k = spokes.indexOf(n), cnt = spokes.length || 1;
         const a = -Math.PI/2 + k*(2*Math.PI/cnt);
-        n.x = cx + Math.cos(a)*R; n.y = cy + Math.sin(a)*R; n.r=30;
+        n.ang = a; n.x = cx + Math.cos(a)*R; n.y = cy + Math.sin(a)*R;
+        n.r = Math.max(26, R*0.20);
       }
     });
   }
   function setAgents(agents) {
-    nodes = [{ id:'maestro', label:'Maestro', role:'orchestrator', glow:0, pulse:0 }]
-      .concat(agents.map(a => ({ id:a.id, label:a.label, role:a.role, glow:0, pulse:0 })));
+    nodes = [{ id:'maestro', label:'Maestro', role:'orchestrator', glow:0, pulse:0, ph:0 }]
+      .concat(agents.map((a,i) => ({ id:a.id, label:a.label, role:a.role, glow:0, pulse:0, ph:i })));
     edges = {};
     nodes.filter(n=>n.id!=='maestro').forEach(n => edges[n.id] = { flow:0 });
-    particles = [];
+    particles = []; intro = 0;
     layout();
   }
   const node = id => nodes.find(n=>n.id===id);
 
-  // fire an event: light a node, pump particles along its edge (dir: 'in' to maestro, 'out' from maestro)
   function fire(actor, kind, meta) {
     const n = node(actor); if (n) { n.glow = 1; n.pulse = 1; }
-    const m = node('maestro'); if (m) m.glow = Math.max(m.glow, .7);
-    // which channel + colour
+    const m = node('maestro'); if (m) m.glow = Math.max(m.glow, .8);
     let id = actor, col = COLOR[actor] || '#88a';
     if ((kind==='skills') && meta && meta.to) { id = meta.to; col = COLOR.archivist;
       const a=node('archivist'); if(a){a.glow=1;a.pulse=1;} }
     else if (kind==='recall' || kind==='learn') { id = 'soloist'; col = COLOR.archivist;
       const a=node('archivist'); if(a){a.glow=1;a.pulse=1;} }
     if (edges[id]) edges[id].flow = 1;
-    // emit a burst of particles along that edge, both directions to feel like a conversation
     const dir = (kind==='code'||kind==='review'||kind==='skills'||kind==='recall'||kind==='learn') ? 'both'
               : (actor==='human'||actor==='conductor') ? 'out' : 'in';
     spawn(id, col, dir);
   }
   function spawn(id, col, dir) {
     const n = node(id); if(!n) return;
-    const burst = 14;
+    const burst = 12;
     for (let i=0;i<burst;i++) {
       const d = dir==='both' ? (i%2?1:-1) : (dir==='out'?1:-1);
-      particles.push({ id, col, p: d>0?0:1, dir:d, speed:.012+Math.random()*.01,
-                       off:(Math.random()-.5)*10, life:1, delay:i*0.03 });
+      particles.push({ id, col, p: d>0?0:1, dir:d, speed:.45+Math.random()*.35,
+                       lane:(Math.random()-.5), delay:i*0.04, trail:[] });
     }
   }
+  const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
 
-  function draw() {
-    t += 1;
+  function draw(now) {
+    const dt = Math.min((now - last)/1000 || 0, 0.05); last = now;  // seconds, frame-rate independent
+    intro = Math.min(1, intro + dt*1.1);
     ctx.clearRect(0,0,W,H);
     const m = node('maestro'); if(!m) { requestAnimationFrame(draw); return; }
+    const T = now/1000;
 
-    // edges (channels) — bidirectional glow tubes
+    // edges — channels with ambient shimmer + flow glow, grow in on intro
     nodes.filter(n=>n.id!=='maestro').forEach(n => {
       const e = edges[n.id] || {flow:0};
-      const grad = ctx.createLinearGradient(m.x,m.y,n.x,n.y);
       const base = COLOR[n.id] || '#5566aa';
-      grad.addColorStop(0, hex(base,.05+e.flow*.20));
-      grad.addColorStop(1, hex(base,.10+e.flow*.30));
-      ctx.strokeStyle = grad; ctx.lineWidth = 1.5 + e.flow*3;
-      ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.lineTo(n.x,n.y); ctx.stroke();
-      e.flow *= 0.94;
+      const ex = m.x + (n.x-m.x)*easeInOut(intro), ey = m.y + (n.y-m.y)*easeInOut(intro);
+      // outer soft tube
+      ctx.strokeStyle = hex(base, .04 + e.flow*.10);
+      ctx.lineWidth = 6 + e.flow*6; ctx.lineCap='round';
+      ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.lineTo(ex,ey); ctx.stroke();
+      // inner bright line + travelling shimmer
+      const grad = ctx.createLinearGradient(m.x,m.y,ex,ey);
+      const sh = (Math.sin(T*1.4 + n.ph)*0.5+0.5);
+      grad.addColorStop(Math.max(0,sh-.15), hex(base,.06+e.flow*.25));
+      grad.addColorStop(sh, hex(base,.22+e.flow*.5));
+      grad.addColorStop(Math.min(1,sh+.15), hex(base,.06+e.flow*.25));
+      ctx.strokeStyle = grad; ctx.lineWidth = 1.4 + e.flow*2.6;
+      ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.lineTo(ex,ey); ctx.stroke();
+      e.flow = Math.max(0, e.flow - dt*0.9);
     });
 
-    // particles flowing along channels
+    // particles — eased, with fading trails and endpoint fade-in/out
     for (let i=particles.length-1;i>=0;i--) {
       const pr = particles[i];
-      if (pr.delay>0) { pr.delay-=0.016; continue; }
+      if (pr.delay>0) { pr.delay-=dt; continue; }
       const n = node(pr.id); if(!n){ particles.splice(i,1); continue; }
-      pr.p += pr.speed*pr.dir;
+      pr.p += pr.speed*pr.dir*dt;
       if (pr.p<=0 || pr.p>=1) { particles.splice(i,1); continue; }
-      // perpendicular offset so streams don't overlap perfectly
       const dx=n.x-m.x, dy=n.y-m.y, len=Math.hypot(dx,dy)||1;
-      const nx=-dy/len, ny=dx/len;
-      const x = m.x+dx*pr.p + nx*pr.off, y = m.y+dy*pr.p + ny*pr.off;
+      const nx=-dy/len, ny=dx/len, spread = pr.lane * Math.min(28, len*0.12);
+      const e = easeInOut(pr.p);
+      const x = m.x+dx*e + nx*spread, y = m.y+dy*e + ny*spread;
+      pr.trail.push([x,y]); if (pr.trail.length>6) pr.trail.shift();
       const fade = Math.sin(pr.p*Math.PI);
-      ctx.beginPath(); ctx.arc(x,y, 2.2*fade+0.8, 0, 7);
-      ctx.fillStyle = hex(pr.col, .85*fade); ctx.shadowColor=pr.col; ctx.shadowBlur=8*fade;
+      // trail
+      for (let k=0;k<pr.trail.length;k++){
+        const a=(k/pr.trail.length)*0.5*fade;
+        ctx.beginPath(); ctx.arc(pr.trail[k][0],pr.trail[k][1], 1.6*fade+0.3,0,7);
+        ctx.fillStyle = hex(pr.col,a); ctx.fill();
+      }
+      // head
+      ctx.beginPath(); ctx.arc(x,y, 2.4*fade+0.7, 0, 7);
+      ctx.fillStyle = hex(pr.col, .9*fade); ctx.shadowColor=pr.col; ctx.shadowBlur=10*fade;
       ctx.fill(); ctx.shadowBlur=0;
     }
 
     // nodes
     nodes.forEach(n => {
       const col = COLOR[n.id] || '#7788cc';
-      const pulse = n.pulse>0 ? n.pulse : 0;
-      // outer glow ring on activity
+      const isHub = n.id==='maestro';
+      const breathe = 1 + Math.sin(T*1.6 + n.ph*1.3)*0.035;
+      const r = n.r*breathe*(0.6+0.4*easeInOut(intro));
+      // activity halo
       if (n.glow>0.02) {
-        ctx.beginPath(); ctx.arc(n.x,n.y, n.r + 8 + pulse*14, 0, 7);
-        ctx.fillStyle = hex(col, 0.10*n.glow); ctx.fill();
+        ctx.beginPath(); ctx.arc(n.x,n.y, r + 10 + n.pulse*16, 0, 7);
+        ctx.fillStyle = hex(col, 0.12*n.glow); ctx.fill();
       }
-      // ambient idle pulse
-      const breathe = 1 + Math.sin(t*0.04 + n.x)*0.02;
-      ctx.beginPath(); ctx.arc(n.x,n.y, n.r*breathe, 0, 7);
-      ctx.fillStyle = hex(col, 0.16 + n.glow*0.20);
-      ctx.fill();
-      ctx.lineWidth = 2 + n.glow*2;
-      ctx.strokeStyle = hex(col, 0.5 + n.glow*0.5);
-      ctx.shadowColor = col; ctx.shadowBlur = 10 + n.glow*26; ctx.stroke(); ctx.shadowBlur=0;
-      // core dot
-      ctx.beginPath(); ctx.arc(n.x,n.y, n.r*0.28, 0, 7);
-      ctx.fillStyle = hex(col, 0.9); ctx.fill();
-      // label
-      ctx.fillStyle = n.id==='maestro' ? '#fff' : hex('#eaf0ff', .92);
-      ctx.font = (n.id==='maestro'?'700 15px':'600 12.5px')+' ui-sans-serif,system-ui';
-      ctx.textAlign='center'; ctx.textBaseline='top';
-      ctx.fillText(n.label, n.x, n.y + n.r + 7);
-      n.glow *= 0.95; n.pulse *= 0.92;
+      // body — radial gradient orb
+      const g = ctx.createRadialGradient(n.x-r*0.3, n.y-r*0.3, r*0.1, n.x, n.y, r);
+      g.addColorStop(0, hex(col, 0.55 + n.glow*0.4));
+      g.addColorStop(0.6, hex(col, 0.18 + n.glow*0.2));
+      g.addColorStop(1, hex(col, 0.06));
+      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, 7); ctx.fillStyle = g; ctx.fill();
+      // rim
+      ctx.lineWidth = (isHub?2.5:2) + n.glow*2;
+      ctx.strokeStyle = hex(col, 0.55 + n.glow*0.45);
+      ctx.shadowColor = col; ctx.shadowBlur = (isHub?16:9) + n.glow*26; ctx.stroke(); ctx.shadowBlur=0;
+      if (isHub) { // second ring for the hub
+        ctx.beginPath(); ctx.arc(n.x,n.y, r*1.18, 0, 7);
+        ctx.strokeStyle = hex(col, 0.18); ctx.lineWidth=1; ctx.stroke();
+      }
+      // glyph in core
+      ctx.fillStyle = hex('#ffffff', 0.92);
+      ctx.font = `${Math.round(r*0.7)}px var(--ui)`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(GLYPH[n.id]||'●', n.x, n.y+1);
+      // label — radially OUTWARD with dark halo
+      const lx = isHub ? n.x : n.x + Math.cos(n.ang)*(r+15);
+      const ly = isHub ? n.y + r + 16 : n.y + Math.sin(n.ang)*(r+15);
+      ctx.font = (isHub?'600 15px':'500 12.5px')+' var(--ui)';
+      ctx.textBaseline = isHub ? 'top' : 'middle';
+      ctx.textAlign = isHub ? 'center' : (Math.cos(n.ang)<-0.3?'right':(Math.cos(n.ang)>0.3?'left':'center'));
+      ctx.lineWidth=3; ctx.strokeStyle='rgba(6,8,15,.9)'; ctx.strokeText(n.label, lx, ly);
+      ctx.fillStyle = hex('#eaf0ff', .94); ctx.fillText(n.label, lx, ly);
+      n.glow = Math.max(0, n.glow - dt*1.0); n.pulse = Math.max(0, n.pulse - dt*1.6);
     });
 
     requestAnimationFrame(draw);
   }
-  function hex(c,a){ // accepts #rrggbb
-    const n=parseInt(c.slice(1),16); return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;
-  }
+  function hex(c,a){ const n=parseInt(c.slice(1),16); return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; }
 
-  window.addEventListener('resize', resize);
-  return { setAgents, fire, start(){ resize(); draw(); }, resize };
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt=setTimeout(resize, 120); });
+  return { setAgents, fire, start(){ resize(); requestAnimationFrame(draw); }, resize };
 })();
 
 // ── phase rail ──────────────────────────────────────────────────────────────
@@ -326,6 +398,34 @@ function renderRail(phase, status) {
 function renderCount() { el('count').textContent = `${rendered} / ${timeline.length}`; }
 function resetView() { el('feed').innerHTML=''; rendered=0; renderCount(); }
 
+const LABEL = { maestro:'Maestro', conductor:'Conductor', soloist:'Soloist',
+                tuningfork:'Tuning Fork', stagetech:'Stage Tech', archivist:'Archivist', human:'You' };
+const VERB = { brief:'received the brief', rider:'inferred the resource contract',
+               plan:'drafted the build plan', skills:'pulled skills from memory',
+               code:'is writing the page', review:'is reviewing the code',
+               deploy:'shipped it live', archive:'saved the run to memory',
+               recall:'recalled a known fix', learn:'learned a verified fix' };
+
+function flash(col) { // event-reactive screen wash
+  if (!window.gsap) return;
+  let f = el('flash'); if (!f) { f=document.createElement('div'); f.id='flash';
+    f.style.cssText='position:fixed;inset:0;z-index:40;pointer-events:none;opacity:0'; document.body.appendChild(f); }
+  f.style.background = `radial-gradient(120% 90% at 50% 50%, ${col}22, transparent 70%)`;
+  gsap.fromTo(f,{opacity:.0},{opacity:.9,duration:.12,yoyo:true,repeat:1,ease:'power2.out'});
+}
+
+function updateNow(actor, kind, status) {
+  const box = el('now');
+  if (status !== 'running') { box.classList.remove('show'); return; }
+  const col = COLOR[actor] || '#fff';
+  box.style.setProperty('--now', col);
+  box.innerHTML = `<span class="glyph" style="color:${col}">${GLYPH[actor]||'●'}</span>`+
+    `<span class="who">${LABEL[actor]||actor}</span>`+
+    `<span class="verb">${VERB[kind]||kind}</span>`+
+    `<span class="wave"><i></i><i></i><i></i><i></i></span>`;
+  box.classList.add('show');
+}
+
 function step(animate) {
   if (rendered >= timeline.length) return false;
   const e = timeline[rendered++];
@@ -337,11 +437,13 @@ function step(animate) {
   let txt = (e.text || '').replace(/</g,'&lt;');
   txt = txt.replace(/(https:\/\/[a-z0-9.-]+\.pages\.dev)/i, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   div.innerHTML =
-    `<div class="top"><span class="who">${e.actor}</span>`+
+    `<div class="top"><span class="glyph" style="color:${col}">${GLYPH[e.actor]||'●'}</span>`+
+    `<span class="who" style="color:${col}">${LABEL[e.actor]||e.actor}</span>`+
     `<span class="kind">${e.kind}</span><span class="ts">${fmt(e.ts)}</span></div>`+
     `<div class="txt">${txt}</div>`;
   el('feed').prepend(div);
   if (animate !== false && window.gsap) gsap.from(div, { duration:.45, y:-10, opacity:0, ease:'power2.out' });
+  if (e.kind === 'deploy') flash('#4fe0a8');
   renderCount();
   return true;
 }
@@ -350,6 +452,10 @@ function setStatus(status, phase) {
   const p = el('status'); p.className = 'pill ' + (status || 'idle');
   el('statusText').innerHTML = (status||'idle') +
     ((phase && phase!=='done' && status==='running') ? ` <span class="phase">· ${PHASE_LABEL[phase]||phase}</span>` : '');
+  // drive the NOW hero from the latest event
+  const last = timeline[timeline.length-1];
+  if (last) updateNow(last.actor, last.kind, status);
+  else el('now').classList.remove('show');
 }
 
 // ── data layer (unchanged contract: /api/live, /api/runs, /api/run/<id>) ─────
@@ -404,6 +510,7 @@ async function selectRun(runId, isCurrent) {
 }
 
 async function boot() {
+  if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch {} }
   Graph.setAgents(DEFAULT_AGENTS);
   Graph.start();
   let live=null; try { live = await fetch('/api/live').then(r=>r.ok?r.json():null); } catch {}
