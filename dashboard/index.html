@@ -251,7 +251,7 @@ const FONT_UI = "'Space Grotesk',system-ui,sans-serif";
 const TAU = Math.PI*2;
 const Graph = (() => {
   const cvs = el('graph'), ctx = cvs.getContext('2d');
-  let W=0, H=0, DPR=1, nodes=[], edges={}, particles=[], motes=[], shock=[], last=0, intro=0;
+  let W=0, H=0, DPR=1, nodes=[], links=[], particles=[], motes=[], shock=[], last=0, intro=0;
 
   function seedMotes() {
     motes = [];
@@ -270,67 +270,73 @@ const Graph = (() => {
     layout();
   }
   function layout() {
-    // nudge the hub slightly up-left of centre so the composition isn't a dead-
-    // symmetric bullseye — gives it a focal point and breathing negative space.
-    const cx=W*0.48, cy=H*0.46, R=Math.min(W, H-70)*0.35;
-    const spokes = nodes.filter(m=>m.id!=='maestro');
-    nodes.forEach(n => {
-      if (n.id==='maestro') { n.x=cx; n.y=cy; n.r=Math.max(46, R*0.34); }   // clearly the hero
-      else {
-        const k = spokes.indexOf(n), cnt = spokes.length || 1;
-        const a = -Math.PI/2 + k*(2*Math.PI/cnt);
-        // slight per-node radius + distance jitter (golden-ratio phased) to break symmetry
-        const jit = 0.88 + 0.24*((k*0.618) % 1);
-        n.ang = a; n.x = cx + Math.cos(a)*R*jit; n.y = cy + Math.sin(a)*R*jit;
-        n.r = Math.max(24, R*0.185*jit);
-      }
+    // hexagon: all six agents are PEERS on the ring — no centre hub, no permanent
+    // edges. Connections are drawn only while two agents are actually talking.
+    const cx=W*0.5, cy=H*0.47, R=Math.min(W, H-80)*0.38;
+    const cnt = nodes.length || 1;
+    nodes.forEach((n,k) => {
+      const a = -Math.PI/2 + k*(TAU/cnt);
+      n.ang = a; n.x = cx + Math.cos(a)*R; n.y = cy + Math.sin(a)*R;
+      n.r = Math.max(26, R*0.165);
     });
   }
   function setAgents(agents) {
-    nodes = [{ id:'maestro', label:'Maestro', role:'orchestrator', glow:0, pulse:0, ph:0 }]
-      .concat(agents.map((a,i) => ({ id:a.id, label:a.label, role:a.role, glow:0, pulse:0, ph:i })));
-    edges = {};
-    nodes.filter(n=>n.id!=='maestro').forEach(n => edges[n.id] = { flow:0 });
-    particles = []; intro = 0;
+    // Maestro is a peer on the hexagon, not a centre — order so the ring reads well.
+    nodes = [{ id:'maestro', label:'Maestro', role:'conducts', glow:0, pulse:0, ph:0 }]
+      .concat(agents.map((a,i) => ({ id:a.id, label:a.label, role:a.role, glow:0, pulse:0, ph:i+1 })));
+    links = []; particles = []; intro = 0;
     layout();
   }
   const node = id => nodes.find(n=>n.id===id);
+  // a transient pulsing connection A→B: glows + flows particles, then fades
+  function link(from, to, col) {
+    const a = node(from), b = node(to);
+    if (!a || !b || from===to) return;
+    links.push({ from, to, col, t:0, life:1 });
+    spawn(from, to, col);
+  }
 
+  // honest routing: who actually talks to whom for each event kind.
+  // control flow goes through Maestro; the Archivist's skill/recall/learn data
+  // flow goes DIRECTLY to the worker it feeds (no Maestro hop) — that's the truth
+  // the old pure-star hid.
+  function route(actor, kind, meta) {
+    if (kind === 'skills' && meta && meta.to) return ['archivist', meta.to];
+    if (kind === 'recall' || kind === 'learn') return ['archivist', 'soloist'];
+    if (kind === 'brief') return ['maestro', 'conductor'];
+    if (kind === 'rider' || kind === 'plan') return ['conductor', 'maestro'];
+    if (kind === 'code') return ['soloist', 'maestro'];
+    if (kind === 'review') return ['tuningfork', 'maestro'];
+    if (kind === 'deploy') return ['stagetech', 'maestro'];
+    if (kind === 'archive') return ['archivist', 'maestro'];
+    return [actor, 'maestro'];
+  }
   function fire(actor, kind, meta) {
-    const n = node(actor); if (n) { n.glow = 1; n.pulse = 1; }
-    const m = node('maestro'); if (m) m.glow = Math.max(m.glow, .8);
-    let id = actor, col = COLOR[actor] || '#88a';
-    if ((kind==='skills') && meta && meta.to) { id = meta.to; col = COLOR.archivist;
-      const a=node('archivist'); if(a){a.glow=1;a.pulse=1;} }
-    else if (kind==='recall' || kind==='learn') { id = 'soloist'; col = COLOR.archivist;
-      const a=node('archivist'); if(a){a.glow=1;a.pulse=1;} }
-    if (edges[id]) edges[id].flow = 1;
-    const dir = (kind==='code'||kind==='review'||kind==='skills'||kind==='recall'||kind==='learn') ? 'both'
-              : (actor==='human'||actor==='conductor') ? 'out' : 'in';
-    spawn(id, col, dir);
+    const [from, to] = route(actor, kind, meta);
+    const a = node(from), b = node(to);
+    if (a) { a.glow = 1; a.pulse = 1; }
+    if (b) b.glow = Math.max(b.glow, 0.9);
+    link(from, to, COLOR[from] || '#88a');
     if (kind==='deploy') celebrate();
   }
-  function celebrate() {  // deploy = the climax — make it spectacular
-    const m = node('maestro'), s = node('stagetech');
-    if (!m) return;
-    const col = COLOR.stagetech;
-    if (s) shock.push({ x:s.x, y:s.y, t:0, dur:1.1, speed:260, col });
-    shock.push({ x:m.x, y:m.y, t:0, dur:1.4, speed:340, col:COLOR.maestro });
-    m.glow = 1.6; m.pulse = 1.6;
-    // radial particle burst from the hub
+  function celebrate() {  // deploy = the climax — burst from the Stage Tech node
+    const s = node('stagetech');
+    const sx = s ? s.x : W/2, sy = s ? s.y : H/2;
+    if (s) { s.glow = 1.6; s.pulse = 1.6; }
+    shock.push({ x:sx, y:sy, t:0, dur:1.1, speed:260, col:COLOR.stagetech });
+    shock.push({ x:sx, y:sy, t:0, dur:1.5, speed:360, col:COLOR.soloist });
     for (let i=0;i<40;i++){
-      const a = (i/40)*6.283, sp = 80+Math.random()*120;
-      particles.push({ free:true, col:i%2?COLOR.maestro:COLOR.soloist,
-        x:m.x, y:m.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:1 });
+      const a = (i/40)*TAU, sp = 80+Math.random()*120;
+      particles.push({ free:true, col:i%2?COLOR.stagetech:COLOR.soloist,
+        x:sx, y:sy, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:1 });
     }
   }
-  function spawn(id, col, dir) {
-    const n = node(id); if(!n) return;
-    const burst = 12;
+  // particles travel from -> to along their connecting line, staggered
+  function spawn(from, to, col) {
+    const burst = 14;
     for (let i=0;i<burst;i++) {
-      const d = dir==='both' ? (i%2?1:-1) : (dir==='out'?1:-1);
-      particles.push({ id, col, p: d>0?0:1, dir:d, speed:.45+Math.random()*.35,
-                       lane:(Math.random()-.5), delay:i*0.04, trail:[] });
+      particles.push({ from, to, col, p:0, speed:.5+Math.random()*.35,
+                       lane:(Math.random()-.5), delay:i*0.05, trail:[] });
     }
   }
   const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
@@ -372,48 +378,38 @@ const Graph = (() => {
     }
     ctx.globalCompositeOperation = 'source-over';
 
-    // store each node's curved-channel control point for this frame (particles reuse it)
-    nodes.forEach(n => { if(n.id!=='maestro'){
-      // constant baseline bend (alternating handedness) so channels ALWAYS curve
-      // like an orchestral fan — never flatten back to a straight 8-bit line
-      const side = (n.ph % 2) ? 1 : -1;
-      const bend = side * (26 + Math.sin(T*0.4 + n.ph)*8);
-      [n._cx, n._cy] = ctrl(m, n, bend);
-    }});
+    // each ordered pair of nodes gets a stable curved control point (so a link
+    // and its particles share the same arc). Bend perpendicular to the chord.
+    const linkCtrl = (a, b) => {
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2, dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1;
+      const bend = 0.16*len;   // gentle constant arc
+      return [mx + (-dy/len)*bend, my + (dx/len)*bend];
+    };
 
     // ── deploy shockwaves (additive) ──
     ctx.globalCompositeOperation = 'lighter';
     for (let i=shock.length-1;i>=0;i--){
       const s=shock[i]; s.t+=dt; const k=s.t/s.dur;
       if (k>=1){ shock.splice(i,1); continue; }
-      // ease-out: expand fast, then settle (a real shockwave) — radius = ease(k)*max
       ctx.beginPath(); ctx.arc(s.x,s.y, easeOutCubic(k)*s.speed*s.dur, 0, TAU);
       ctx.strokeStyle = hex(s.col, (1-k)*0.55); ctx.lineWidth = 4*(1-k); ctx.stroke();
     }
     ctx.globalCompositeOperation = 'source-over';
 
-    // ── channels: curved bezier tubes with additive bloom + travelling shimmer ──
+    // ── transient connections: a curved glowing arc only WHILE two agents talk ──
     ctx.globalCompositeOperation = 'lighter';
-    nodes.filter(n=>n.id!=='maestro').forEach(n => {
-      const e = edges[n.id] || {flow:0};
-      const base = COLOR[n.id] || '#5566aa';
-      const cx = m.x + (n._cx-m.x)*ease, cy = m.y + (n._cy-m.y)*ease;
-      const ex = m.x + (n.x-m.x)*ease, ey = m.y + (n.y-m.y)*ease;
-      const path = () => { ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.quadraticCurveTo(cx,cy,ex,ey); ctx.stroke(); };
+    for (let i=links.length-1;i>=0;i--){
+      const lk = links[i]; lk.t += dt; lk.life = Math.max(0, 1 - lk.t/2.0);   // ~2s life
+      if (lk.life<=0){ links.splice(i,1); continue; }
+      const a=node(lk.from), b=node(lk.to); if(!a||!b){ links.splice(i,1); continue; }
+      const [cx,cy] = linkCtrl(a,b);
+      const al = lk.life;
       ctx.lineCap='round';
-      // wide soft glow tube
-      ctx.strokeStyle = hex(base, .05 + e.flow*.10); ctx.lineWidth = 7 + e.flow*8; path();
-      // mid
-      ctx.strokeStyle = hex(base, .10 + e.flow*.20); ctx.lineWidth = 2.5 + e.flow*3; path();
-      // bright travelling shimmer core (a moving highlight along the channel)
-      const sh = (Math.sin(T*1.2 + n.ph)*0.5+0.5);
-      const [sx, sy] = bez(m, cx, cy, n, sh);
-      const gg = ctx.createRadialGradient(sx,sy,0, sx,sy, 26);
-      gg.addColorStop(0, hex(base, .5+e.flow*.4)); gg.addColorStop(1, hex(base,0));
-      ctx.save(); ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.quadraticCurveTo(cx,cy,ex,ey);
-      ctx.lineWidth = 2.5; ctx.strokeStyle = gg; ctx.stroke(); ctx.restore();
-      e.flow = Math.max(0, e.flow - dt*0.85);
-    });
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo(cx,cy,b.x,b.y);
+      ctx.strokeStyle = hex(lk.col, .06*al); ctx.lineWidth = 7*al + 1; ctx.stroke();   // soft tube
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo(cx,cy,b.x,b.y);
+      ctx.strokeStyle = hex(lk.col, .35*al); ctx.lineWidth = 1.6*al + .4; ctx.stroke(); // bright core
+    }
     ctx.globalCompositeOperation = 'source-over';
 
     // ── particles flowing ALONG the curve (additive glow) ──
@@ -427,11 +423,17 @@ const Graph = (() => {
         bloomDot(pr.x,pr.y, 3*pr.life+0.6, pr.col, pr.life);
         continue;
       }
-      const n = node(pr.id); if(!n){ particles.splice(i,1); continue; }
-      pr.p += pr.speed*pr.dir*dt;
-      if (pr.p<=0 || pr.p>=1) { particles.splice(i,1); continue; }
+      const a = node(pr.from), b = node(pr.to);
+      if(!a||!b){ particles.splice(i,1); continue; }
+      pr.p += pr.speed*dt;
+      if (pr.p>=1) { particles.splice(i,1); continue; }
+      // share the link's arc; offset by lane so streams don't overlap
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2, dxc=b.x-a.x, dyc=b.y-a.y, lenc=Math.hypot(dxc,dyc)||1;
+      const cxp = mx + (-dyc/lenc)*(0.16*lenc), cyp = my + (dxc/lenc)*(0.16*lenc);
       const e2 = easeInOut(pr.p);
-      const [x,y] = bez(m, n._cx, n._cy, n, e2);
+      const lane = pr.lane * Math.min(18, lenc*0.07);
+      let [x,y] = bez(a, cxp, cyp, b, e2);
+      x += (-dyc/lenc)*lane; y += (dxc/lenc)*lane;
       const fade = Math.sin(pr.p*Math.PI);
       pr.trail.push([x,y]); if (pr.trail.length>7) pr.trail.shift();
       for (let k=0;k<pr.trail.length;k++){
