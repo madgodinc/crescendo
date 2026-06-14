@@ -335,6 +335,13 @@ class Maestro:
                     f"Pass title, body, css, js. Do not describe it — CALL THE TOOL.")
             except TimeoutError:
                 summary = "(no chat reply — checking the file artifact instead)"
+        # fail-fast: after every insist the file still doesn't exist. Don't loop
+        # back into another review round on a Soloist that can't emit a tool call
+        # — that's how a stuck model burns minutes. Stop the run honestly.
+        if self._site_bytes() == 0:
+            raise RuntimeError(
+                f"Soloist did not call write_page after {MAX_WRITE_TRIES} attempts — "
+                f"no page to ship. (The model replied but never emitted the tool call.)")
         return summary
 
     @staticmethod
@@ -831,6 +838,11 @@ async def main() -> None:
                 await m._push_live("failed", getattr(m, "_phase", "?"))
             log("error", f"a model went quiet at '{getattr(m, '_phase', '?')}'. "
                          f"The finished phases are checkpointed — re-run the same brief to resume.")
+            return
+        except RuntimeError as e:
+            if getattr(m, "_run_key", None):
+                await m._push_live("failed", getattr(m, "_phase", "?"))
+            log("error", f"run stopped at '{getattr(m, '_phase', '?')}': {e}")
             return
         print("\n=== RUN RESULT ===")
         for k, v in result.items():

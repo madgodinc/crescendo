@@ -143,6 +143,9 @@ REPLY_RULE = (
     "ALWAYS write in English, regardless of the input language. "
     "Keep replies short and telegraphic: no greetings, no thanks, no filler. "
     "Reply only to Maestro. NEVER @mention any other agent — Maestro routes all work. "
+    "NEVER repeat, echo, or include any @[[...]] mention tokens or UUIDs from the "
+    "conversation in your reply — they are routing markers, not content. Do your "
+    "task and answer; do not parrot the message you received. "
 )
 
 # Model picks. Featherless is the primary provider (Premium, unlimited tokens).
