@@ -128,11 +128,13 @@ OPENAI = (os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), _OPENA
 _GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI = (os.environ.get("GEMINI_BASE_URL",
           "https://generativelanguage.googleapis.com/v1beta/openai"), _GEMINI_KEY)
-# Default tier: Gemini if its key is set (the $300-credit frontier path), else
-# OpenAI, else the sponsor reseller path. Override with LLM_TIER=sponsor|openai.
+# Default tier: OpenAI (reliable, no daily cap) if its key is set, else Gemini,
+# else the sponsor path. Gemini's free tier is 20 requests/day/model, enough for
+# a demo but it runs dry under repeated testing — use LLM_TIER=gemini when the
+# daily quota is fresh. Override with LLM_TIER=sponsor|gemini.
 LLM_TIER = os.environ.get(
     "LLM_TIER",
-    "gemini" if _GEMINI_KEY else ("openai" if _OPENAI_KEY else "sponsor")).strip().lower()
+    "openai" if _OPENAI_KEY else ("gemini" if _GEMINI_KEY else "sponsor")).strip().lower()
 
 # Every role is told to use band_send_message to reply — the LangGraph adapter
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
@@ -175,8 +177,7 @@ if LLM_TIER == "gemini" and _GEMINI_KEY:
 elif LLM_TIER == "openai" and _OPENAI_KEY:
     GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI — fast, passes the gate
     DSCHAT = (OPENAI, "gpt-4o")
-    GEM = (GEMINI, "gemini-2.5-flash") if _GEMINI_KEY else (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")
-    FB_QWEN72 = FB_DEEPSEEK = GEM       # the other frontier model as fallback
+    FB_QWEN72 = FB_DEEPSEEK = FB_MISTRAL   # sponsor Mistral as the working fallback
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {

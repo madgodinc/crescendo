@@ -818,7 +818,14 @@ async def main() -> None:
 
     # One-shot mode: a brief on the command line runs once in the command room and exits.
     if len(sys.argv) > 1:
-        result = await m.run(sys.argv[1], room=command_room)
+        try:
+            result = await m.run(sys.argv[1], room=command_room)
+        except TimeoutError:
+            if getattr(m, "_run_key", None):
+                await m._push_live("failed", getattr(m, "_phase", "?"))
+            log("error", f"a model went quiet at '{getattr(m, '_phase', '?')}'. "
+                         f"The finished phases are checkpointed — re-run the same brief to resume.")
+            return
         print("\n=== RUN RESULT ===")
         for k, v in result.items():
             print(f"{k}: {str(v)[:120]}")
