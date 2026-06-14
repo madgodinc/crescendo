@@ -279,6 +279,13 @@ class Maestro:
         except OSError:
             return 0.0
 
+    @staticmethod
+    def _site_bytes() -> int:
+        try:
+            return os.path.getsize(SITE_PATH)
+        except OSError:
+            return 0
+
     async def ask_soloist_write(self, task: str, brief: str) -> str:
         """Ask the Soloist to build the page AND verify it actually called
         write_page. Weak models narrate ('Created a page...') without emitting
@@ -299,12 +306,12 @@ class Maestro:
             if self._site_mtime() > before:
                 return summary   # the file was (re)written — that's the real signal
             # The file wasn't rewritten THIS round. That's only a failure if no
-            # valid page exists at all (the first write never landed). On a later
-            # round, a Soloist that judges the page already correct legitimately
-            # doesn't rewrite — insisting then just spins the loop to max rounds.
-            # So only insist when there's no shippable file; otherwise accept it.
-            if before > 0 and not validate_site():
-                log("write", "soloist didn't rewrite, but a valid page already exists — accepting")
+            # page exists at all (the first write never landed). On a later round,
+            # a Soloist that judges the page already correct legitimately doesn't
+            # rewrite — insisting then just spins the loop to max rounds. So if a
+            # non-empty page is already on disk, accept it instead of insisting.
+            if self._site_bytes() > 0:
+                log("write", "soloist didn't rewrite, but a page already exists — accepting")
                 return summary
             log("write", f"soloist did not write the file (attempt {attempt-1}); insisting")
             self.record("soloist", "code",
