@@ -203,8 +203,12 @@ class Maestro:
             page += 1
         return out
 
-    async def wait_reply(self, from_key: str, since: datetime) -> str:
-        """Poll until `from_key` posts a non-empty message AFTER `since`, or timeout."""
+    async def wait_reply(self, from_key: str, since: datetime, done_check=None) -> str:
+        """Poll until `from_key` posts a non-empty message AFTER `since`, or timeout.
+
+        `done_check` is an optional callable: if it returns truthy, the agent's
+        work is confirmed by an artifact (e.g. the Soloist wrote the file) even
+        though its chat ACK was lost — stop waiting early instead of timing out."""
         uuid, _ = WORKERS[from_key]
         waited = 0
         while waited < REPLY_TIMEOUT:
@@ -220,16 +224,19 @@ class Maestro:
                 self.seen_ids.add(m.id)
                 log("reply", f"<- {from_key}: {m.content[:80]}")
                 return m.content
+            if done_check and done_check():
+                log("reply", f"<- {from_key}: (artifact confirmed; chat ACK lost)")
+                return "(work confirmed by artifact)"
             await asyncio.sleep(POLL_INTERVAL)
             waited += POLL_INTERVAL
         raise TimeoutError(f"{from_key} did not reply within {REPLY_TIMEOUT}s")
 
-    async def ask(self, to_key: str, text: str, retries: int = 1) -> str:
+    async def ask(self, to_key: str, text: str, retries: int = 1, done_check=None) -> str:
         """Send to one agent and wait for its reply, with retry."""
         for attempt in range(retries + 1):
             sent_at = await self.say(to_key, text)
             try:
-                return await self.wait_reply(to_key, sent_at)
+                return await self.wait_reply(to_key, sent_at, done_check=done_check)
             except TimeoutError:
                 if attempt < retries:
                     log("retry", f"{to_key} silent, retrying ({attempt + 1})")
@@ -238,7 +245,7 @@ class Maestro:
         raise RuntimeError(f"{to_key} ask exhausted retries")  # unreachable, keeps a str return contract
 
     async def ask_with_skills(self, to_key: str, text: str, skill_query: str,
-                              retries: int = 1) -> str:
+                              retries: int = 1, done_check=None) -> str:
         """Ask an agent, but first have the Archivist pull relevant skills from the
         skill libraries and prepend them — weak models get expert guidance upfront."""
         libs = SKILL_LIBS.get(to_key, [])
@@ -251,7 +258,7 @@ class Maestro:
                         {"to": to_key, "count": n, "libraries": libs})
             await self._push_live("running", self._phase)
             text = f"{skills}\n\n---\n{text}"
-        return await self.ask(to_key, text, retries=retries)
+        return await self.ask(to_key, text, retries=retries, done_check=done_check)
 
     @staticmethod
     def _site_mtime() -> float:
@@ -267,19 +274,30 @@ class Maestro:
         file's mtime, ask, and if the file didn't change we insist — up to
         MAX_WRITE_TRIES — with an increasingly explicit instruction."""
         before = self._site_mtime()
-        summary = await self.ask_with_skills("soloist", task, skill_query=brief)
+        # The Soloist may do the work (write the file) but its chat ACK can get
+        # lost in Band — so a reply timeout is NOT a failure if the file changed.
+        # Treat the file artifact as the source of truth: stop waiting as soon as
+        # the file appears, and don't fail on a lost ACK.
+        wrote = lambda: self._site_mtime() > before
+        try:
+            summary = await self.ask_with_skills("soloist", task, skill_query=brief, done_check=wrote)
+        except TimeoutError:
+            summary = "(no chat reply — checking the file artifact instead)"
         for attempt in range(2, MAX_WRITE_TRIES + 1):
             if self._site_mtime() > before:
-                return summary   # the file was (re)written — good
+                return summary   # the file was (re)written — that's the real signal
             log("write", f"soloist did not write the file (attempt {attempt-1}); insisting")
             self.record("soloist", "code",
                         "⟳ no file written — asking the Soloist to actually call write_page",
                         {"retry": attempt - 1})
             await self._push_live("running", "code-review")
-            summary = await self.ask("soloist",
-                f"You replied but did NOT call the write_page tool, so no file exists. "
-                f"You MUST call write_page now to build the page for this brief: {brief}\n"
-                f"Pass title, body, css, js. Do not describe it — CALL THE TOOL.")
+            try:
+                summary = await self.ask("soloist",
+                    f"You replied but did NOT call the write_page tool, so no file exists. "
+                    f"You MUST call write_page now to build the page for this brief: {brief}\n"
+                    f"Pass title, body, css, js. Do not describe it — CALL THE TOOL.")
+            except TimeoutError:
+                summary = "(no chat reply — checking the file artifact instead)"
         return summary
 
     @staticmethod
