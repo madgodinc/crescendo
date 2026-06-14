@@ -124,7 +124,12 @@ AIMLAPI = (os.environ["AIMLAPI_BASE_URL"], os.environ["AIMLAPI_API_KEY"])
 # benchmark lever to measure the quality/speed delta vs a frontier model.
 _OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI = (os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), _OPENAI_KEY)
-LLM_TIER = os.environ.get("LLM_TIER", "sponsor").strip().lower()
+# Gemini via its OpenAI-compatible endpoint, so the same ChatOpenAI wrapper works.
+_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI = (os.environ.get("GEMINI_BASE_URL",
+          "https://generativelanguage.googleapis.com/v1beta/openai"), _GEMINI_KEY)
+# Default tier: frontier model if a key exists (sponsors ran out), else sponsor.
+LLM_TIER = os.environ.get("LLM_TIER", "openai" if _OPENAI_KEY or _GEMINI_KEY else "sponsor").strip().lower()
 
 # Every role is told to use band_send_message to reply — the LangGraph adapter
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
@@ -151,14 +156,21 @@ DSCHAT = (AIMLAPI, "deepseek-chat")                      # conductor (plan text)
 FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # fallback only — Featherless plan caps Qwen-72B at 1 concurrent request (4 units), so it can't be a primary under any parallelism
 FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
 
-# Turbo tier: route every role to frontier OpenAI models for the comparison run.
-# Sponsor tier (default) is untouched — this only activates with LLM_TIER=turbo
-# AND a real OpenAI key, so a normal run always stays on the sponsor APIs.
-if LLM_TIER == "turbo" and _OPENAI_KEY:
-    GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI (no reseller hop)
-    DSCHAT = (OPENAI, "gpt-4o")         # plan text on the frontier model too
-    FB_QWEN72 = (OPENAI, "gpt-4o")      # keep the fallback on the same fast path
-    FB_DEEPSEEK = (OPENAI, "gpt-4o")
+# The sponsor credits ran out mid-testing ($10 of AIMLAPI burned through; the
+# Featherless plan caps a 72B model at one concurrent request and stalls), so the
+# default tier now runs the roles on a frontier model and keeps the sponsor APIs
+# as fallback. LLM_TIER picks the frontier provider: "openai" (default if a key
+# is set) or "gemini". A reseller/sponsor-only run is still possible with
+# LLM_TIER=sponsor.
+if LLM_TIER == "gemini" and _GEMINI_KEY:
+    FRONTIER = (GEMINI, "gemini-2.0-flash")
+    GPT4O = DSCHAT = FB_QWEN72 = FB_DEEPSEEK = FRONTIER
+elif LLM_TIER != "sponsor" and _OPENAI_KEY:
+    FRONTIER = (OPENAI, "gpt-4o")       # direct OpenAI — fast, passes the gate
+    GPT4O = (OPENAI, "gpt-4o")
+    DSCHAT = (OPENAI, "gpt-4o")
+    FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")   # sponsor as real fallback
+    FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
