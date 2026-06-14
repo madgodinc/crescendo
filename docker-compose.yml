@@ -39,6 +39,22 @@ services:
       retries: 40          # cold start loads ~550MB of models — give it room
       start_period: 30s
 
+  # one-shot: seed the design/css/security/process/anti-slop skill libraries into
+  # the brain so the Archivist has expert guidance to feed agents from a clean
+  # clone. Idempotent — skips libraries that already hold skills — and exits.
+  seed:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    command: ["python", "seed_skills.py"]
+    environment:
+      MGIMIND_URL: http://brain:8765
+      MGIMIND_TOKEN_ARCHIVIST: ${MGIMIND_TOKEN_ARCHIVIST:-crescendo_archivist_tok}
+    depends_on:
+      brain:
+        condition: service_healthy
+    restart: "no"
+
   dashboard:
     build:
       context: .

@@ -4,10 +4,12 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir python-dotenv
+RUN pip install --no-cache-dir python-dotenv httpx
 
-# only the dashboard assets + server are needed here (not the orchestrator)
+# the dashboard server + the skill seeder (so the same image can seed the brain's
+# skill libraries on first compose-up). Not the full orchestrator.
 COPY dashboard/ /app/dashboard/
+COPY seed_skills.py /app/seed_skills.py
 
 # MGIMIND_URL points at the brain service on the compose network; the bearer
 # token is read from the env (compose passes it from .env).
