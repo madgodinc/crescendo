@@ -250,17 +250,24 @@ class Maestro:
             return True
         return False
 
-    # Negative markers a reviewer uses when it does NOT say the magic word "ISSUE".
-    _NEG = re.compile(r"\b(ISSUE|PROBLEM|BUG|BROKEN|MISSING|TRUNCAT|INCOMPLETE|"
-                      r"SHOULD FIX|NEEDS? FIX|CONCERN|ERROR|FAIL|NOT WORK)", re.I)
+    # Negative markers a reviewer uses when it does NOT say the magic word "ISSUE"
+    # (word-bounded so "PROBLEM" doesn't match inside an unrelated longer word).
+    _NEG = re.compile(r"\b(ISSUES?|PROBLEMS?|BUGS?|BROKEN|MISSING|TRUNCAT\w*|"
+                      r"INCOMPLETE|SHOULD FIX|NEEDS? FIX|CONCERNS?|ERRORS?|"
+                      r"FAIL\w*|NOT WORK\w*)\b", re.I)
+    # "no problems", "without bugs", "zero issues", "nothing missing" — a NEGATED
+    # negative is actually positive, so strip these before scanning.
+    _NEGATED = re.compile(r"\b(NO|ZERO|WITHOUT|NOTHING)\s+\w*\s*"
+                          r"(ISSUES?|PROBLEMS?|BUGS?|ERRORS?|CONCERNS?|MISSING)\b", re.I)
 
     @classmethod
     def _is_clean(cls, review: str) -> bool:
         """A review is clean ONLY on an explicit positive signal AND no negative
         marker. Weak models phrase findings as 'problem/concern/bug' without the
         literal 'ISSUE', so 'no ISSUE token' must NOT be read as clean — that
-        silently ships broken pages (the whole point of the review gate)."""
-        up = _clean(review).upper()
+        silently ships broken pages (the whole point of the review gate). But a
+        NEGATED negative ('no problems') is positive, so strip those first."""
+        up = cls._NEGATED.sub(" ", _clean(review).upper())
         if cls._NEG.search(up):
             return False
         return "CLEAN" in up or "LOOKS GOOD" in up or "LGTM" in up

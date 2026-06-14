@@ -110,6 +110,15 @@
   .idle-cmd .prompt { color:var(--maestro); margin-right:8px; }
   .idle-cmd .arg { color:var(--soloist); }
 
+  /* deploy payoff banner over the stage */
+  .shipped { position:absolute; top:38%; left:50%; transform:translate(-50%,-50%);
+             text-align:center; pointer-events:none; opacity:0; z-index:4; }
+  .shipped .badge { font-size:22px; font-weight:700; letter-spacing:.12em; color:var(--soloist);
+                    text-shadow:0 0 24px rgba(79,224,168,.7); }
+  .shipped .url { display:block; margin-top:8px; font-family:var(--mono); font-size:13px;
+                  color:var(--ink); pointer-events:auto; }
+  .shipped .url a { color:var(--soloist); text-decoration:none; }
+
   /* phase rail bottom-left over the canvas */
   .rail { position:absolute; left:24px; bottom:22px; display:flex; gap:10px;
           padding:10px 14px; border-radius:14px; background:var(--panel);
@@ -193,6 +202,7 @@
   <div class="stage">
     <canvas id="graph"></canvas>
     <div class="now" id="now"></div>
+    <div class="shipped" id="shipped"></div>
     <div class="idle" id="idle">
       <div class="idle-title">Awaiting a brief</div>
       <div class="idle-cmd"><span class="prompt">$</span> uv run python maestro.py <span class="arg">"build a dark-themed timer page"</span></div>
@@ -248,7 +258,7 @@ const Graph = (() => {
     for (let i=0;i<n;i++) motes.push({
       x:Math.random()*W, y:Math.random()*H,
       vx:(Math.random()-.5)*6, vy:(Math.random()-.5)*6,
-      r:Math.random()*1.4+0.3, a:Math.random()*0.4+0.1, ph:Math.random()*6.28 });
+      r:Math.random()*1.2+0.7, a:Math.random()*0.3+0.18, ph:Math.random()*6.28 });
   }
   function resize() {
     DPR = Math.min(window.devicePixelRatio||1, 2);
@@ -297,16 +307,16 @@ const Graph = (() => {
   }
   function celebrate() {  // deploy = the climax — make it spectacular
     const m = node('maestro'), s = node('stagetech');
+    if (!m) return;
     const col = COLOR.stagetech;
     if (s) shock.push({ x:s.x, y:s.y, t:0, dur:1.1, speed:260, col });
-    if (m) { shock.push({ x:m.x, y:m.y, t:0, dur:1.4, speed:340, col:COLOR.maestro });
-      m.glow = 1.6; m.pulse = 1.6; }
+    shock.push({ x:m.x, y:m.y, t:0, dur:1.4, speed:340, col:COLOR.maestro });
+    m.glow = 1.6; m.pulse = 1.6;
     // radial particle burst from the hub
     for (let i=0;i<40;i++){
       const a = (i/40)*6.283, sp = 80+Math.random()*120;
-      particles.push({ id:'soloist', col:i%2?COLOR.maestro:COLOR.soloist, p:0, dir:1,
-        speed:0, free:true, x:m.x, y:m.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp,
-        life:1, trail:[] });
+      particles.push({ free:true, col:i%2?COLOR.maestro:COLOR.soloist,
+        x:m.x, y:m.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, life:1 });
     }
   }
   function spawn(id, col, dir) {
@@ -453,22 +463,36 @@ const Graph = (() => {
 
 // ── phase rail ──────────────────────────────────────────────────────────────
 function renderRail(phase, status) {
-  const done = new Set();
+  const box = el('rail');
+  // Build the DOM once; afterwards only mutate classes, so the active-phase
+  // ring pulse runs continuously instead of restarting every 1.5s poll.
+  if (!box.children.length) {
+    PHASES.forEach((p,i) => {
+      if (i) { const s=document.createElement('div'); s.className='sep'; box.appendChild(s); }
+      const d=document.createElement('div'); d.dataset.ph=p;
+      d.innerHTML = `<span class="ring"></span>${PHASE_LABEL[p]}`;
+      box.appendChild(d);
+    });
+  }
   const idx = PHASES.indexOf(phase);
-  PHASES.forEach((p,i) => { if (i<idx || status==='done') done.add(p); });
-  const box = el('rail'); box.innerHTML='';
-  PHASES.forEach((p,i) => {
-    if (i) { const s=document.createElement('div'); s.className='sep'; box.appendChild(s); }
-    const d=document.createElement('div');
-    const st = status==='done' ? 'done' : done.has(p) ? 'done' : (p===phase ? 'active':'');
-    d.className='ph '+st;
-    d.innerHTML = `<span class="ring"></span>${PHASE_LABEL[p]}`;
-    box.appendChild(d);
+  box.querySelectorAll('.ph,[data-ph]').forEach(d => {
+    const p = d.dataset.ph; if (!p) return;
+    const i = PHASES.indexOf(p);
+    const st = (status==='done' || i<idx) ? 'done' : (p===phase && status==='running' ? 'active' : '');
+    d.className = 'ph ' + st;
   });
 }
 
 // ── decision trail ──────────────────────────────────────────────────────────
-function renderCount() { el('count').textContent = `${rendered} / ${timeline.length}`; }
+let _countShown = 0;
+function renderCount() {
+  const total = timeline.length;
+  if (window.gsap && rendered !== _countShown) {
+    gsap.to({v:_countShown}, { v:rendered, duration:.4, ease:'power1.out',
+      onUpdate(){ el('count').textContent = `${Math.round(this.targets()[0].v)} / ${total}`; },
+      onComplete(){ _countShown = rendered; } });
+  } else { el('count').textContent = `${rendered} / ${total}`; }
+}
 function resetView() { el('feed').innerHTML=''; rendered=0; renderCount(); }
 
 const LABEL = { maestro:'Maestro', conductor:'Conductor', soloist:'Soloist',
@@ -516,9 +540,21 @@ function step(animate) {
     `<div class="txt">${txt}</div>`;
   el('feed').prepend(div);
   if (animate !== false && window.gsap) gsap.from(div, { duration:.45, y:-10, opacity:0, ease:'power2.out' });
-  if (e.kind === 'deploy') flash('#4fe0a8');
+  if (e.kind === 'deploy') { flash('#4fe0a8'); showShipped(e.text || ''); }
   renderCount();
   return true;
+}
+
+function showShipped(text) {
+  const url = (text.match(/https:\/\/[a-z0-9.-]+\.pages\.dev/i) || [])[0];
+  const box = el('shipped');
+  box.innerHTML = `<div class="badge">✦ SHIPPED</div>` +
+    (url ? `<div class="url"><a href="${url}" target="_blank" rel="noopener">${url}</a></div>` : '');
+  if (!window.gsap) return;
+  gsap.killTweensOf(box);
+  gsap.fromTo(box, { opacity:0, y:14, scale:.92 },
+    { opacity:1, y:0, scale:1, duration:.5, ease:'back.out(1.7)' });
+  gsap.to(box, { opacity:0, duration:.6, delay:3.2, ease:'power2.in' });
 }
 
 function setStatus(status, phase) {
