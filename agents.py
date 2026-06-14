@@ -154,20 +154,22 @@ REPLY_RULE = (
 # 2026-06-14 PM: Featherless began rate-limiting hard (429 storms stalling runs);
 # AIMLAPI recovered. Flip primary->AIMLAPI (gpt-4o is a reliable tool-caller),
 # Featherless->fallback. Both providers are wired so whichever is healthy wins.
-GPT4O = (AIMLAPI, "gpt-4o")                              # reliable tool calls — tool roles
-DSCHAT = (AIMLAPI, "deepseek-chat")                      # conductor (plan text)
-FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # fallback only — Featherless plan caps Qwen-72B at 1 concurrent request (4 units), so it can't be a primary under any parallelism
-FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
+# Sponsor models (Featherless). Mistral-Small-24B emits tool calls AND passes the
+# acceptance gate (Qwen2.5-72B is slower and fails it); it's the sponsor primary.
+FB_MISTRAL = (FEATHERLESS, "mistralai/Mistral-Small-24B-Instruct-2501")
+FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")
+FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")
+GPT4O = FB_MISTRAL                       # default sponsor primary (AIMLAPI ran out of funds)
+DSCHAT = FB_MISTRAL
 
 # The sponsor credits ran out mid-testing ($10 of AIMLAPI burned through; the
 # Featherless plan caps a 72B model at one concurrent request and stalls), so the
-# default tier now runs the roles on a frontier model and keeps the sponsor APIs
-# as fallback. LLM_TIER picks the frontier provider: "openai" (default if a key
-# is set) or "gemini". A reseller/sponsor-only run is still possible with
-# LLM_TIER=sponsor.
+# default tier runs the roles on a frontier model. LLM_TIER picks the provider:
+# "gemini" (default if a key is set), "openai", or "sponsor" to force the
+# Featherless-only path (Mistral-Small-24B) for the partner-prize run.
 if LLM_TIER == "gemini" and _GEMINI_KEY:
     GEM = (GEMINI, "gemini-2.5-flash")  # fast, passes the gate (thinking off)
-    OAI = (OPENAI, "gpt-4o") if _OPENAI_KEY else (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")
+    OAI = (OPENAI, "gpt-4o") if _OPENAI_KEY else FB_MISTRAL
     GPT4O = DSCHAT = GEM
     FB_QWEN72 = FB_DEEPSEEK = OAI       # OpenAI as the cross-provider fallback
 elif LLM_TIER == "openai" and _OPENAI_KEY:
