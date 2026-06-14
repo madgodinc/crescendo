@@ -112,6 +112,24 @@
   .idle-cmd .prompt { color:var(--maestro); margin-right:8px; }
   .idle-cmd .arg { color:var(--soloist); }
 
+  /* human-approval gate banner — shown while the run pauses for sign-off */
+  .approval { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+              text-align:center; opacity:0; pointer-events:none; transition:opacity .4s;
+              z-index:5; max-width:440px; padding:26px 30px; border-radius:18px;
+              border:1px solid rgba(255,207,90,.5); background:rgba(20,18,30,.86);
+              backdrop-filter:blur(10px); box-shadow:0 0 50px rgba(255,207,90,.18); }
+  .approval.show { opacity:1; }
+  .ap-lock { font-size:30px; animation:apPulse 1.6s ease-in-out infinite; }
+  @keyframes apPulse { 50% { transform:scale(1.12); opacity:.75; } }
+  .ap-title { font-size:17px; font-weight:700; color:var(--maestro); margin:8px 0 6px; letter-spacing:.02em; }
+  .ap-sub { font-size:13px; color:var(--dim); line-height:1.5; }
+  .ap-act { margin-top:16px; display:flex; flex-direction:column; align-items:center; gap:9px; }
+  .ap-btn { font-family:var(--mono); font-size:13px; font-weight:700; letter-spacing:.1em;
+            color:#1a1206; background:var(--maestro); padding:8px 22px; border-radius:9px;
+            box-shadow:0 0 18px rgba(255,207,90,.35); }
+  .ap-hint { font-size:11.5px; color:var(--dim); }
+  .ap-hint code { font-family:var(--mono); color:var(--maestro); }
+
   /* deploy payoff banner over the stage */
   .shipped { position:absolute; top:38%; left:50%; transform:translate(-50%,-50%);
              text-align:center; pointer-events:none; opacity:0; z-index:4; }
@@ -222,6 +240,12 @@
   <div class="stage">
     <canvas id="graph"></canvas>
     <div class="now" id="now"></div>
+    <div class="approval" id="approval">
+      <div class="ap-lock">🔒</div>
+      <div class="ap-title">Human approval required</div>
+      <div class="ap-sub">This brief needs external access. The orchestra paused before deploy and is waiting for a human sign-off.</div>
+      <div class="ap-act"><span class="ap-btn">APPROVE</span><span class="ap-hint">reply <code>APPROVE</code> in the Band room to authorise the deploy</span></div>
+    </div>
     <div class="shipped" id="shipped"></div>
     <div class="idle" id="idle">
       <div class="idle-title">Awaiting a brief</div>
@@ -253,12 +277,12 @@ const DEFAULT_AGENTS = [
   { id:'stagetech', label:'Stage Tech', role:'deploys' },
   { id:'archivist', label:'Archivist', role:'memory & skills' },
 ];
-const PHASES = ['rider','plan','code-review','deploy','archive'];
-const PHASE_LABEL = { rider:'Rider', plan:'Plan', 'code-review':'Code ↔ Review', deploy:'Deploy', archive:'Archive' };
+const PHASES = ['rider','plan','code-review','approval','deploy','archive'];
+const PHASE_LABEL = { rider:'Rider', plan:'Plan', 'code-review':'Code ↔ Review', approval:'Approval', deploy:'Deploy', archive:'Archive' };
 // which event kinds belong to which phase (for timing + token rollup)
 const EVENT_PHASE = { brief:'rider', rider:'rider', plan:'plan',
-  skills:'code-review', code:'code-review', review:'code-review', recall:'deploy',
-  learn:'deploy', deploy:'deploy', archive:'archive' };
+  skills:'code-review', code:'code-review', review:'code-review', approval:'approval',
+  recall:'deploy', learn:'deploy', deploy:'deploy', archive:'archive' };
 const fmtDur = s => s<60 ? `${s.toFixed(1)}s` : `${Math.floor(s/60)}m${String(Math.round(s%60)).padStart(2,'0')}s`;
 const fmtTok = t => t>=1000 ? `${(t/1000).toFixed(1)}k` : `${t}`;
 
@@ -761,6 +785,10 @@ function setStatus(status, phase) {
   else el('now').classList.remove('show');
   // idle hero shows only when truly idle (no run loaded)
   el('idle').classList.toggle('show', status==='idle' && !timeline.length);
+  // approval gate banner: visible only while the run is paused for sign-off
+  const paused = phase==='approval' && status==='running';
+  el('approval').classList.toggle('show', paused);
+  if (paused) el('now').classList.remove('show');   // banner takes the stage
 }
 
 // ── data layer (unchanged contract: /api/live, /api/runs, /api/run/<id>) ─────
