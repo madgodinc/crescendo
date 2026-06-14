@@ -142,6 +142,11 @@
   .tokchip { font-family:var(--mono); font-size:11px; color:var(--archivist); padding:4px 11px;
              border:1px solid rgba(184,155,255,.4); border-radius:20px; background:rgba(184,155,255,.08);
              white-space:nowrap; transition:opacity .3s; }
+  .auditbtn { font-size:12px; font-weight:600; color:var(--green); text-decoration:none;
+              padding:6px 13px; border:1px solid rgba(79,224,168,.45); border-radius:20px;
+              background:rgba(79,224,168,.08); white-space:nowrap; transition:.15s; }
+  .auditbtn:hover { background:rgba(79,224,168,.16); box-shadow:0 0 14px rgba(79,224,168,.25); }
+  .auditbtn.off { opacity:.35; pointer-events:none; }
 
   /* right column: decision trail + runs */
   .side { border-left:1px solid var(--line); background:linear-gradient(180deg, rgba(10,14,26,.5), rgba(6,8,15,.5));
@@ -205,6 +210,7 @@
     <div class="logo">Cre<span class="c">scendo</span><span class="sub">orchestra of AI agents</span></div>
     <div class="brief" id="brief"></div>
     <div class="tokchip" id="tokTotal" style="opacity:0"></div>
+    <a class="auditbtn" id="auditBtn" href="#" title="Open the tamper-evident audit report for this run">⛓ Audit report</a>
     <div class="pill idle" id="status"><span class="led"></span><span id="statusText">idle</span></div>
   </header>
 
@@ -755,6 +761,9 @@ function loadDoc(doc, opts={}) {
   curRunId = doc.run_id || null;
   timeline = doc.timeline || [];
   curPhase = doc.phase || 'rider';
+  const ab = el('auditBtn');
+  if (ab) { if (curRunId) { ab.href = '/audit/' + curRunId; ab.classList.remove('off'); }
+            else ab.classList.add('off'); }
   el('brief').innerHTML = doc.brief ? `<b>Brief:</b> ${doc.brief}` : '';
   setStatus(doc.status, doc.phase);
   renderRail(doc.phase, doc.status);
@@ -818,6 +827,8 @@ async function boot() {
     if (!data) { el('feed').innerHTML='<div class="ev"><div class="txt">No data — run serve.py (live) or maestro.py.</div></div>'; return; }
     loadDoc({ ...data, status:'done', phase:'done' });
     setStatus('offline');
+    // offline vitrine: point the audit button at the pre-rendered static report
+    const ab = el('auditBtn'); if (ab) { ab.href = 'audit.html'; ab.classList.remove('off'); }
   }
   el('step').onclick = () => step(true);
   el('play').onclick = async () => {
