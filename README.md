@@ -4,8 +4,10 @@
 
 Crescendo takes one brief, plans it, builds it, reviews its own work, fixes the
 bugs it catches, and deploys a working product to a live URL. It writes every
-decision to a SHA-256 hash-chained audit trail. It is tamper-evident: no decision
-can be altered after the fact, and you can open it and verify the chain yourself.
+decision to a SHA-256 hash-chained, per-author-signed audit trail you can open and
+verify: who decided what, in what order, and whether the artifacts they claimed
+actually exist. The claim is precise, provenance and integrity, not "the decision
+was correct": tamper-evident, attributable, and grounded against real artifacts.
 
 Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of-agents-hackathon)
 (June 12–19, 2026).
@@ -14,20 +16,31 @@ Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of
 
 ## Prove every decision
 
-Every agent writes to one shared memory ([mgi-mind](https://github.com/madgodinc/mgi-mind))
-with its own token, so every entry carries its author. The audit report chains
-those entries: each row's hash is `SHA-256(previous_hash + agent + action +
-content + timestamp)`. Change any past decision and every hash after it breaks, so
-the trail is tamper-evident. You can replay who decided what and when, and verify
-nothing was edited after the fact. That is the Track-3 claim, made checkable.
+Three independent checks back the claim, and each defends a different thing.
 
-The chain proves no decision was *altered*. A second pass proves no agent *lied*:
-every entry that points at an external artifact (a written page, a live deploy
-URL, a deterministic check result) is verified to actually have one. The audit
-report shows a single number, `N/N grounded`, so the trail is tamper-evident and
-grounded: you can't change it after the fact, and an agent can't claim an artifact
-it never produced. The grounding pass is deterministic and report-only, so it adds
-no model and can't stall a run.
+**Integrity (hash chain).** The audit report chains every row:
+`SHA-256(previous_hash + agent + action + content + timestamp)`. Edit any past row
+and every hash after it breaks, so a post-hoc edit to the published trail is
+detectable. This is the standard part.
+
+**Authorship (per-author HMAC).** Each row also carries
+`HMAC(agent_key, agent + action + content + timestamp)`, signed with that agent's
+key. A row's author can't be forged without it, so an outside party with store
+access can't rewrite a row under a different author. Stated honestly: this is
+provenance and integrity of the published trail against an outside editor, not a
+zero-trust guarantee against the orchestrator itself, which holds the keys to
+write on each agent's behalf. Tamper-evident, not tamper-proof, and the report
+says so.
+
+**Grounding.** The chain proves no row was *altered*; signing proves *who* wrote
+it; grounding proves no agent *lied*. Every row that points at an external artifact
+(a written page, a live deploy URL, a deterministic check result) is verified to
+actually have one. The report shows `N/N grounded`. The grounding pass is
+deterministic and report-only, so it adds no model and can't stall a run.
+
+Per-author provenance is the reason there are five agents and not one tool-calling
+loop: a trail that attributes each decision to a distinct author needs distinct
+authors. The agent count follows from the provability goal, it isn't decoration.
 
 High-stakes briefs add a human in the loop: when the Conductor's resource contract
 says a project needs real external access, the deploy waits for a human sign-off,
@@ -40,12 +53,17 @@ skills the agents pull from, and the checkpoints that let a crashed run resume.
 
 ## The flywheel
 
-Crescendo gets cheaper and more accurate the longer it runs. A deploy failure is
-reduced to a stable signature; the Archivist recalls whether memory already solved
-that failure class and feeds the fix to the Soloist; a fix that then passes is
-learned back as a verified procedure. Next run recalls it instead of rediscovering
-it. The Archivist also pulls only the *relevant* context for each step rather than
-the full window, so longer projects stay coherent on fewer tokens.
+A deploy failure is reduced to a stable signature; the Archivist recalls whether
+memory already solved that failure class and feeds the fix to the Soloist; a fix
+that then passes the deploy gate is learned back as a verified procedure, so the
+next matching failure is recalled instead of rediscovered.
+
+This loop has fired on real runs: the dashboard's flywheel view lists the fixes
+memory has actually learned from deploy-gate refusals. What it does not yet show
+is a measured cost curve over many runs. The example runs below all hit the same
+3-round cap, so "cheaper and faster every run" is the loop's design intent, not a
+number we have demonstrated. The mechanism is wired and firing; the long-run
+economics are honest future work, not a current claim.
 
 ## Why this is different
 
@@ -104,8 +122,11 @@ through real Band primitives:
 - **Replies land back in the room**; the Maestro reads them by `sender_id` since a
   timestamp. An `AutoReplyLangGraphAdapter` guarantees an agent's plain-text reply
   reaches the room even when the model forgets to call the send tool.
-- **A control loop in code** is the safety net under the prompts: it ignores system
-  events, lets an agent act only when mentioned, and stops a run that runs too long.
+- **A control loop in code** sequences these Band primitives deterministically: it
+  decides which agent the Maestro `@mention`s next, reads the reply the
+  `AutoReplyLangGraphAdapter` delivered, and bounds the run. Band does the
+  collaboration; the loop conducts it, the way a score conducts an orchestra that
+  is still the one playing.
 
 ## Architecture
 
