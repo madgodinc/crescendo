@@ -142,7 +142,7 @@ REPLY_RULE = (
 # Featherless->fallback. Both providers are wired so whichever is healthy wins.
 GPT4O = (AIMLAPI, "gpt-4o")                              # reliable tool calls — tool roles
 DSCHAT = (AIMLAPI, "deepseek-chat")                      # conductor (plan text)
-FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # reliable tool calls; Tuning Fork primary (AIMLAPI stalls on its heavy review turn)
+FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # fallback only — Featherless plan caps Qwen-72B at 1 concurrent request (4 units), so it can't be a primary under any parallelism
 FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
@@ -162,16 +162,15 @@ ROSTER = {
         "with target='_blank' MUST have rel='noopener'; load resources over https only; never hard-code "
         "any API key or token. Do NOT add a favicon or base64. Do NOT paste code in chat. After the "
         "tool returns, reply one line."),
-    "Tuning Fork": ("TUNING_FORK", FB_QWEN72, GPT4O,
-        REPLY_RULE + "You are the Tuning Fork — the critic. FIRST call check_page (pass a key "
-        "term from the brief as must_contain) to RUN a deterministic check: structure + a headless "
-        "browser render reporting console/JS errors and visible content. If check_page reports "
-        "CHECK FAILED, those are ISSUES — list them. Then ALSO read the code (list_files, read_file) "
-        "and review correctness against the brief. Before deciding, adversarially state the single "
-        "strongest reason this page would fail or embarrass in production (a real edge case, not "
-        "nitpicking); if that reason holds, it is an ISSUE. Reply 'CLEAN' only if check_page PASSED, "
-        "the code is right, and that worst-case reason does not hold — else 'ISSUES: ...' with "
-        "concrete fixes. Write the review in English."),
+    "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
+        REPLY_RULE + "You are the Tuning Fork — the critic. Call check_page ONCE (pass a key term "
+        "from the brief as must_contain): it runs a deterministic gate — structure, a headless "
+        "render reporting console/JS errors, dead controls, secrets, placeholder text. That gate is "
+        "your source of truth. If it reports CHECK FAILED, list those as ISSUES. If it PASSED, the "
+        "page is structurally sound — do a quick correctness pass against the brief (you may read_file "
+        "index.html ONCE if needed, but don't over-inspect) and flag only a real, concrete defect. "
+        "Reply 'CLEAN' if the gate passed and the brief is met, else 'ISSUES: ...' with concrete "
+        "fixes. Be decisive and brief — one check, one short verdict. Write in English."),
     "Stage Tech": ("STAGE_TECH", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Stage Tech — the deployer. CALL deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
