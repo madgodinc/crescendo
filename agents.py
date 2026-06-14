@@ -129,11 +129,13 @@ ROSTER = {
 
 
 def _llm(spec):
-    """One resilient chat model: bounded timeout + a couple retries on the spec's
-    (provider, model)."""
+    """One chat model with a bounded timeout and NO internal retries — retrying is
+    delegated to .with_fallbacks() (the other provider) and maestro's ask() retry.
+    With max_retries=2 the worst case was 90s×3×2 providers ≫ REPLY_TIMEOUT and
+    aborted runs; this keeps it to primary 70s + fallback 70s ≈ 140s < 200s."""
     (base_url, api_key), model = spec
     return ChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                      temperature=0, max_tokens=8192, timeout=90, max_retries=2)
+                      temperature=0, max_tokens=8192, timeout=70, max_retries=0)
 
 
 def build(prefix, primary, fallback, role) -> Agent:

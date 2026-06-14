@@ -116,6 +116,11 @@ class Maestro:
             "ts": datetime.now(timezone.utc).isoformat(),
             "actor": actor, "kind": kind, "text": text[:600], "meta": meta or {},
         })
+        # bound growth: every checkpoint + live-push re-serialises the whole list,
+        # so cap it (a normal run is ~20 events; a pathological retry storm won't
+        # balloon the KV blob).
+        if len(self.events) > 250:
+            self.events = self.events[-250:]
 
     def _live_doc(self, status: str, phase: str) -> dict:
         """The per-run document the dashboard polls (superset of replay.json)."""
@@ -139,8 +144,16 @@ class Maestro:
             log("live", f"push failed (ignored): {type(e).__name__}")
 
     async def say(self, to_key: str, text: str) -> datetime:
-        """Post a message @mentioning one worker. Returns the send timestamp."""
+        """Post a message @mentioning one worker. Returns the send timestamp.
+
+        Before posting, mark every EXISTING message from that worker as seen, so
+        a late/orphaned reply from a prior round (e.g. a slow LLM that answered
+        after we timed out and retried) can't be picked up as the answer to THIS
+        question."""
         uuid, handle = WORKERS[to_key]
+        for m in await self._all_messages():
+            if m.sender_id == uuid:
+                self.seen_ids.add(m.id)
         await self.rc.agent_api_messages.create_agent_chat_message(
             self.room,
             message=ChatMessageRequest(
@@ -199,6 +212,7 @@ class Maestro:
                     log("retry", f"{to_key} silent, retrying ({attempt + 1})")
                 else:
                     raise
+        raise RuntimeError(f"{to_key} ask exhausted retries")  # unreachable, keeps a str return contract
 
     async def ask_with_skills(self, to_key: str, text: str, skill_query: str,
                               retries: int = 1) -> str:
@@ -236,13 +250,28 @@ class Maestro:
             return True
         return False
 
+    # Negative markers a reviewer uses when it does NOT say the magic word "ISSUE".
+    _NEG = re.compile(r"\b(ISSUE|PROBLEM|BUG|BROKEN|MISSING|TRUNCAT|INCOMPLETE|"
+                      r"SHOULD FIX|NEEDS? FIX|CONCERN|ERROR|FAIL|NOT WORK)", re.I)
+
+    @classmethod
+    def _is_clean(cls, review: str) -> bool:
+        """A review is clean ONLY on an explicit positive signal AND no negative
+        marker. Weak models phrase findings as 'problem/concern/bug' without the
+        literal 'ISSUE', so 'no ISSUE token' must NOT be read as clean — that
+        silently ships broken pages (the whole point of the review gate)."""
+        up = _clean(review).upper()
+        if cls._NEG.search(up):
+            return False
+        return "CLEAN" in up or "LOOKS GOOD" in up or "LGTM" in up
+
     @staticmethod
     def _count_issues(review: str) -> int:
         """Best-effort count of distinct issues in a reviewer's ISSUES reply
         (numbered '1.' or bulleted lines). Falls back to 1 if it found issues
         but no list structure, 0 if the text reads clean."""
         text = _clean(review)
-        if "ISSUE" not in text.upper():
+        if not Maestro._NEG.search(text):
             return 0
         numbered = len(re.findall(r"(?m)^\s*\d+[.)]\s+\S", text))
         if numbered:
@@ -412,7 +441,7 @@ class Maestro:
         # PHASE 2/3 — code <-> review negotiation (Archivist feeds design/css/antislop skills)
         self._phase = "code-review"
         if self._resumed("code-review"):
-            verdict = result.get("review_verdict", "clean")
+            verdict = result.get("review_verdict", "unknown")
         else:
             code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
             verdict = ""
@@ -429,7 +458,7 @@ class Maestro:
                     f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
                 result[f"review_{rnd}"] = review
                 last_review = review
-                clean = "CLEAN" in review.upper() or "ISSUE" not in review.upper()
+                clean = self._is_clean(review)
                 self.record("tuningfork", "review", _clean(review),
                             {"round": rnd, "verdict": "clean" if clean else "issues"})
                 await self._push_live("running", "code-review")
@@ -462,6 +491,13 @@ class Maestro:
             deploy = result.get("deploy", "")
         else:
             deploy = await self._deploy_phase(brief)
+            # A gate refusal / timeout has no pages.dev URL — that's a real
+            # failure. Don't checkpoint deploy as done or report it as success;
+            # raise so the run is honestly marked failed and can be retried.
+            if "pages.dev" not in deploy:
+                self.record("stagetech", "deploy", _clean(deploy), {"failed": True})
+                await self._push_live("failed", "deploy")
+                raise RuntimeError(f"deploy failed: {_clean(deploy)[:160]}")
             result["deploy"] = deploy
             url = _clean(deploy)
             self.record("stagetech", "deploy", url,

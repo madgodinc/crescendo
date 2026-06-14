@@ -94,6 +94,13 @@ def validate_site() -> list[str]:
     problems = []
     if len(html.strip()) < 150:
         problems.append(f"index.html is suspiciously small ({len(html)} bytes)")
+    # The fixed shell alone is ~230 valid bytes, so a blank-body page passes the
+    # byte floor. Require real VISIBLE content (tags + whitespace stripped) so an
+    # empty page can't ship as a "successful" deploy.
+    visible = re.sub(r"<[^>]+>", " ", html)
+    visible = re.sub(r"\s+", " ", visible).strip()
+    if len(visible) < 30:
+        problems.append(f"page has almost no visible content ({len(visible)} chars)")
     if "<html" not in low:
         problems.append("no <html> tag")
     if "</html>" not in low:
@@ -144,11 +151,23 @@ async def _deploy_site() -> str:
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         env={**os.environ, "PATH": os.path.expanduser("~/.npm-global/bin:") + os.environ.get("PATH", "")},
     )
-    out, _ = await proc.communicate()
+    # wrangler can hang (auth prompt, network stall) — never let it freeze a run
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        return "ERROR: deploy timed out after 120s (wrangler did not finish)."
     text = out.decode(errors="replace")
     urls = re.findall(r"https://[a-z0-9.-]+\.pages\.dev", text)
     if urls:
-        return f"DEPLOYED: {urls[-1]}  (production: https://{PROJECT}-5vj.pages.dev)"
+        # prefer a stable alias URL over the per-deploy hash subdomain (e.g.
+        # https://main.<proj>.pages.dev rather than https://<hash>.<proj>.pages.dev)
+        stable = [u for u in urls if not re.match(r"https://[0-9a-f]{8}\.", u)]
+        url = stable[-1] if stable else urls[-1]
+        return f"DEPLOYED: {url}  (production: https://{PROJECT}-5vj.pages.dev)"
     return f"deploy finished but no URL parsed:\n{text[-400:]}"
 
 
