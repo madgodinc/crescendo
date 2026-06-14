@@ -43,6 +43,8 @@ REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
 REPLY_TIMEOUT = 200      # wait for a reply; allows the agent's LLM fallback (≤90s+90s) to complete
 MAX_REVIEW_ROUNDS = 3    # bounded code<->review negotiation
+MAX_WRITE_TRIES = 3      # how many times to insist the Soloist actually call write_page
+SITE_PATH = "/home/madgodinc/code/crescendo/workspace/site/index.html"
 
 # Which skill libraries the Archivist pulls from for each role. This is the
 # "Archivist feeds skills to every agent" mechanism, driven deterministically.
@@ -231,6 +233,35 @@ class Maestro:
         return await self.ask(to_key, text, retries=retries)
 
     @staticmethod
+    def _site_mtime() -> float:
+        try:
+            return os.path.getmtime(SITE_PATH)
+        except OSError:
+            return 0.0
+
+    async def ask_soloist_write(self, task: str, brief: str) -> str:
+        """Ask the Soloist to build the page AND verify it actually called
+        write_page. Weak models narrate ('Created a page...') without emitting
+        the tool call, leaving a stale file that then ships. We snapshot the
+        file's mtime, ask, and if the file didn't change we insist — up to
+        MAX_WRITE_TRIES — with an increasingly explicit instruction."""
+        before = self._site_mtime()
+        summary = await self.ask_with_skills("soloist", task, skill_query=brief)
+        for attempt in range(2, MAX_WRITE_TRIES + 1):
+            if self._site_mtime() > before:
+                return summary   # the file was (re)written — good
+            log("write", f"soloist did not write the file (attempt {attempt-1}); insisting")
+            self.record("soloist", "code",
+                        "⟳ no file written — asking the Soloist to actually call write_page",
+                        {"retry": attempt - 1})
+            await self._push_live("running", "code-review")
+            summary = await self.ask("soloist",
+                f"You replied but did NOT call the write_page tool, so no file exists. "
+                f"You MUST call write_page now to build the page for this brief: {brief}\n"
+                f"Pass title, body, css, js. Do not describe it — CALL THE TOOL.")
+        return summary
+
+    @staticmethod
     def _run_id(brief: str) -> str:
         """Stable id for a brief so a re-launch finds its checkpoint."""
         return "run_" + hashlib.sha1(brief.strip().encode("utf-8")).hexdigest()[:12]
@@ -352,15 +383,15 @@ class Maestro:
                     try:
                         result = await self.run(brief, room=command_room)
                         rider = result.get("rider") or []
-                        rider_line = ("\n🎫 Нужен был доступ: "
+                        rider_line = ("\n🎫 Access needed: "
                                       + ", ".join(r["name"] for r in rider)) if rider else ""
                         verdict = result.get("review_verdict", "")
-                        review_line = (f"\n⚠ Зашло с открытыми замечаниями ({verdict})"
+                        review_line = (f"\n⚠ Shipped with open issues ({verdict})"
                                        if verdict.startswith("shipped-with") else "")
                         await self.rc.agent_api_messages.create_agent_chat_message(
                             command_room,
                             message=ChatMessageRequest(
-                                content=f"✅ Готово: {result.get('deploy', '')}{rider_line}{review_line}",
+                                content=f"✅ Done: {result.get('deploy', '')}{rider_line}{review_line}",
                                 mentions=self_m))
                     except Exception as e:
                         # surface the failure on the dashboard (not frozen on "running")
@@ -370,7 +401,7 @@ class Maestro:
                                                 "failed", datetime.now(timezone.utc).isoformat())
                         await self.rc.agent_api_messages.create_agent_chat_message(
                             command_room,
-                            message=ChatMessageRequest(content=f"⚠️ Сбой: {type(e).__name__}: {e}", mentions=self_m))
+                            message=ChatMessageRequest(content=f"⚠️ Failed: {type(e).__name__}: {e}", mentions=self_m))
                         log("error", f"{type(e).__name__}: {e}")
                     # after a run, ignore everything up to now so we wait for the NEXT brief
                     seen = {x.id for x in await self._room_messages(command_room)}
@@ -450,12 +481,18 @@ class Maestro:
         if self._resumed("code-review"):
             verdict = result.get("review_verdict", "unknown")
         else:
+            # Start clean: remove any page left over from a prior brief so a
+            # Soloist that fails to write can't accidentally ship a stale page.
+            try:
+                os.remove(SITE_PATH)
+            except OSError:
+                pass
             code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
             verdict = ""
             last_review = ""
             for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
                 log("phase", f"code round {rnd}")
-                code_summary = await self.ask_with_skills("soloist", code_task, skill_query=brief)
+                code_summary = await self.ask_soloist_write(code_task, brief)
                 self.record("soloist", "code", _clean(code_summary), {"round": rnd})
                 await self._push_live("running", "code-review")
                 # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.

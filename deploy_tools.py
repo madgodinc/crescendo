@@ -51,7 +51,7 @@ def _clean_slot(s: str) -> str:
 # Fixed HTML shell — assembled in Python so a weak model can NEVER break the
 # structure, truncate </html>, or smuggle base64 into the document skeleton.
 SHELL = """<!doctype html>
-<html lang="ru"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
 <style>{css}</style></head>

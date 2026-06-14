@@ -90,41 +90,47 @@ AIMLAPI = (os.environ["AIMLAPI_BASE_URL"], os.environ["AIMLAPI_API_KEY"])
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
 REPLY_RULE = (
     "To reply, you MUST call the band_send_message tool — plain text is NOT sent. "
+    "ALWAYS write in English, regardless of the input language. "
     "Keep replies short and telegraphic: no greetings, no thanks, no filler. "
     "Reply only to Maestro. NEVER @mention any other agent — Maestro routes all work. "
 )
 
-# Model picks. Featherless is the primary provider (Premium, unlimited tokens,
-# reliable); AIMLAPI is the fallback. If the primary call errors or times out,
-# LangChain transparently retries on the fallback — so one provider going down
-# (AIMLAPI returned Cloudflare 522 on 2026-06-14) no longer stalls a run.
-DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")   # strong reasoning + tool calls
-QWEN_CODER = (FEATHERLESS, "Qwen/Qwen3-Coder-Next")     # fast coder, reliable tool calls
+# Model picks. Featherless is the primary provider (Premium, unlimited tokens).
+# CRITICAL: most Featherless models will NARRATE a tool call instead of emitting
+# one (verified 2026-06-14: DeepSeek-V3.1 and Qwen3-Coder-Next returned 0 tool
+# calls on a realistic Soloist prompt, so the Soloist "said" it wrote the page
+# but never called write_page → a stale page shipped). Qwen2.5-72B-Instruct is
+# the one that reliably emits tool calls, so every tool-using role runs on it.
+# DeepSeek-V3.1 is fine for the Conductor (plan text, no tools). AIMLAPI is the
+# cross-provider fallback (it was down — Cloudflare 522 — on 2026-06-14).
+QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")     # reliable tool calls — all tool roles
+DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")   # strong reasoning, text-only roles
 FB_DEEPSEEK = (AIMLAPI, "deepseek-chat")                 # fallback
-FB_GPT4O = (AIMLAPI, "gpt-4o")                            # fallback
+FB_GPT4O = (AIMLAPI, "gpt-4o")                            # fallback (reliable tool calls)
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
     "Conductor": ("CONDUCTOR", DEEPSEEK, FB_DEEPSEEK,
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
-    "Soloist": ("SOLOIST", QWEN_CODER, FB_GPT4O,
-        REPLY_RULE + "You are the Soloist — the engineer. Build the page with the write_page "
-        "tool: pass title, body (markup INSIDE <body> only — NO <html>/<head>/<body>/<script>/"
-        "<style> tags), css (rules only), js (code only). The HTML shell is fixed for you. Do "
-        "NOT add a favicon or base64. Do NOT paste code in chat. Reply with a one-line summary."),
-    "Tuning Fork": ("TUNING_FORK", DEEPSEEK, FB_DEEPSEEK,
-        REPLY_RULE + "You are the Tuning Fork — the critic. Use list_files then read_file to read "
+    "Soloist": ("SOLOIST", QWEN72, FB_GPT4O,
+        REPLY_RULE + "You are the Soloist — the engineer. You MUST actually CALL the write_page "
+        "tool (do not just describe it): pass title, body (markup INSIDE <body> only — NO "
+        "<html>/<head>/<body>/<script>/<style> tags), css (rules only), js (code only). The HTML "
+        "shell is fixed for you. Build EXACTLY what the brief asks for, in English. Do NOT add a "
+        "favicon or base64. Do NOT paste code in chat. After the tool returns, reply one line."),
+    "Tuning Fork": ("TUNING_FORK", QWEN72, FB_GPT4O,
+        REPLY_RULE + "You are the Tuning Fork — the critic. CALL list_files then read_file to read "
         "the Soloist's code yourself — never expect it in chat. CHECK FIRST that the file is "
         "complete and not truncated (must end with </html>); if truncated or empty, that's an "
-        "ISSUE. Then review correctness. Reply 'CLEAN' only if the file is whole and works, else "
-        "'ISSUES: ...' with concrete fixes."),
-    "Stage Tech": ("STAGE_TECH", QWEN_CODER, FB_DEEPSEEK,
-        REPLY_RULE + "You are the Stage Tech — the deployer. Call deploy_site and reply with "
+        "ISSUE. Then review correctness against the brief. Reply 'CLEAN' only if the file is whole "
+        "and works, else 'ISSUES: ...' with concrete fixes. Write the review in English."),
+    "Stage Tech": ("STAGE_TECH", QWEN72, FB_GPT4O,
+        REPLY_RULE + "You are the Stage Tech — the deployer. CALL deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
-    "Archivist": ("ARCHIVIST", DEEPSEEK, FB_DEEPSEEK,
-        REPLY_RULE + "You are the Archivist — memory. Use remember to store what you're told, "
-        "recall to fetch context, and reply with a one-line confirmation or summary."),
+    "Archivist": ("ARCHIVIST", QWEN72, FB_GPT4O,
+        REPLY_RULE + "You are the Archivist — memory. CALL remember to store what you're told, "
+        "recall to fetch context, and reply with a one-line confirmation or summary in English."),
 }
 
 
