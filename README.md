@@ -219,6 +219,25 @@ gate in 8–15s; the sponsor 72B model takes ~65s and the page fails the gate
 (no working JS). That gap is the case for putting a stronger model behind each
 role, measured by an objective check rather than a vibe.
 
+## Example runs
+
+The orchestra is not pinned to one kind of page. These all ran through the full
+pipeline (plan, code, review, deploy) and shipped to a live URL. The sponsor
+runs use Featherless (Mistral-Small-24B) on the unlimited monthly plan; the
+frontier runs use Gemini / GPT-4o.
+
+| Brief | What it exercises | Provider | Rounds |
+|-------|-------------------|----------|--------|
+| Pomodoro timer, dark theme, start/reset + session counter | interactive JS controls | Mistral (sponsor) | 3 |
+| Photography portfolio, 6-image gallery grid | content + layout | Mistral (sponsor) | 3 |
+| SaaS pricing page, 3 tiers × 5 features | structured data | Mistral (sponsor) | 3 |
+| Craft brewery landing, four beers with ABV | content + theming | Gemini | 3 |
+| Tea house landing, four teas with steep times | content | GPT-4o | 3 |
+
+Each row left a hash-chained audit trail you can open from the dashboard. The
+review loop is capped at three rounds; a page that still has open notes ships
+honestly and the trail records that it did, rather than passing it off as clean.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
