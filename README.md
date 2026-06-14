@@ -174,9 +174,10 @@ docker compose -f docker-compose.yml -f docker-compose.image.yml up
 
 ### 3. Drive the live orchestra (bring your own keys)
 
-The engine is here; the fuel is yours: five [Band](https://band.ai) agents, an LLM
-key (Featherless or AI/ML API), and a Cloudflare account for the deploy. Copy the
-template and fill it in:
+The engine is here; the fuel is yours: five [Band](https://band.ai) agents, any
+OpenAI-compatible LLM key (Gemini, OpenAI, Featherless, or AI/ML API — set
+`LLM_TIER`), and a Cloudflare account for the deploy. Copy the template and fill
+it in:
 
 ```
 cp .env.example .env        # add your Band + LLM + Cloudflare keys
@@ -194,7 +195,7 @@ opens the tamper-evident trail of every decision.
 
 ## What's built
 
-- Five agents on Band, each with its own LLM brain (Featherless primary, AI/ML API fallback)
+- Five agents on Band, each with its own LLM brain, provider-agnostic over any OpenAI-compatible API (we run Gemini and GPT-4o; the Featherless and AI/ML API sponsor keys are wired as a fallback tier)
 - Star coordination with a control loop in code
 - Shared memory, every write attributed to its agent
 - A resource contract: the Conductor infers the access a brief needs before any work starts
@@ -204,6 +205,19 @@ opens the tamper-evident trail of every decision.
 - The Stage Tech deploys to a live Cloudflare Pages URL and reports the real link
 - A live dashboard for the orchestra graph and the decision trail, served from memory
 - Crash-proof runs: state is checkpointed to memory and resumes after any kill
+
+## Models
+
+Crescendo is provider-agnostic: every role runs on an OpenAI-compatible endpoint,
+swapped by `LLM_TIER` with no code change. The sponsor credits ($10 of AI/ML API,
+a Featherless plan) ran dry during testing, so the runs here use Gemini 2.5 Flash
+and GPT-4o, with the sponsor APIs kept as a fallback tier.
+
+The deterministic acceptance gate doubles as a model yardstick: same brief, same
+gate. A frontier model (Gemini 2.5 Flash, GPT-4o) builds a page that passes the
+gate in 8–15s; the sponsor 72B model takes ~65s and the page fails the gate
+(no working JS). That gap is the case for putting a stronger model behind each
+role, measured by an objective check rather than a vibe.
 
 ## License
 
