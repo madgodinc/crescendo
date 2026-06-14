@@ -1,0 +1,12 @@
+# Use the prebuilt multi-arch brain image instead of building from source.
+# Fast: pulls a ready image (binary + Qdrant + ONNX + models baked in), no
+# compile, no model download.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.image.yml up
+#
+# (available once the image is published to Docker Hub)
+
+services:
+  brain:
+    image: madgodinc/mgi-mind:v1.7.0
+    build: !reset null

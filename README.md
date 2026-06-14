@@ -89,11 +89,12 @@ docker compose up
 ```
 
 Open http://localhost:8000. The dashboard talks to a real brain; the recorded run
-is shown until you drive a live one (next). To build the brain from source instead
-of pulling the image:
+is shown until you drive a live one (next). The first build compiles the brain
+(Rust) and bakes in ~550MB of models, so it takes a few minutes; after that it's
+cached. Once the prebuilt image is published, skip the build with a fast pull:
 
 ```
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.image.yml up
 ```
 
 ### 3. Drive the live orchestra (bring your own keys)

@@ -10,13 +10,19 @@
 # full live orchestra, copy .env.example -> .env, add your Band + LLM + Cloudflare
 # keys, and run `uv run python agents.py` + `uv run python maestro.py "<brief>"`.
 #
-# Default uses the prebuilt brain image (fast pull). To build the brain from
-# source instead:  docker compose --profile build up
+# `docker compose up` builds the brain from the bundled submodule (first build
+# is slow — it compiles the Rust binary and bakes ~550MB of models — then it's
+# cached). For a fast pull of the prebuilt multi-arch image once it's published:
+#   docker compose -f docker-compose.yml -f docker-compose.image.yml up
 
 services:
   brain:
-    # prebuilt, multi-arch — the whole brain (binary + Qdrant + ONNX + models)
-    image: madgodinc/mgi-mind:v1.7.0
+    # the whole brain (binary + bundled Qdrant + ONNX runtime + models), built
+    # from the pinned submodule so it works out of the box from a clone.
+    image: crescendo-brain:local
+    build:
+      context: ./brain
+      dockerfile: Dockerfile
     environment:
       # a stable token so the dashboard and orchestrator can reach the brain
       MGIMIND_TOKEN: ${MGIMIND_TOKEN_ARCHIVIST:-crescendo_archivist_tok}
