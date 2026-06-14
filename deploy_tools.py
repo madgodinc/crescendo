@@ -48,7 +48,7 @@ def _clean_slot(s: str) -> str:
     return s
 
 
-# Fixed HTML shell — assembled in Python so a weak model can NEVER break the
+# Fixed HTML shell: assembled in Python so a weak model can NEVER break the
 # structure, truncate </html>, or smuggle base64 into the document skeleton.
 SHELL = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -201,7 +201,7 @@ _AUDIT_JS = r"""
 })();
 """
 
-# 5. leaked-secret patterns — high precision only (curated, not "looks like a key").
+# 5. leaked-secret patterns: high precision only (curated, not "looks like a key").
 _SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
@@ -209,7 +209,7 @@ _SECRET_PATTERNS = [
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]{20,}"),
     re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),
 ]
-# 12. placeholder text left in the visible page — owner's "broken text" pain.
+# 12. placeholder text left in the visible page: owner's "broken text" pain.
 _PLACEHOLDER = re.compile(r"lorem ipsum|your text here|insert[_ ]|\bTODO\b|\bFIXME\b|placeholder text|xxxxx", re.I)
 
 
@@ -334,7 +334,7 @@ async def _deploy_site() -> str:
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         env={**os.environ, "PATH": os.path.expanduser("~/.npm-global/bin:") + os.environ.get("PATH", "")},
     )
-    # wrangler can hang (auth prompt, network stall) — never let it freeze a run
+    # wrangler can hang (auth prompt, network stall): never let it freeze a run
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
     except asyncio.TimeoutError:

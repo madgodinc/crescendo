@@ -49,13 +49,13 @@ SITE_PATH = "/home/madgodinc/code/crescendo/workspace/site/index.html"
 
 # Risk-gated human approval before deploy. A benign brief (the Conductor's
 # resource contract came back empty) ships straight through; a high-stakes one
-# (the contract needs real external access) requires sign-off — proportional
+# (the contract needs real external access) requires sign-off: proportional
 # autonomy, the Track-3 beat. Mode:
-#   auto  (default) — record the sign-off requirement and auto-grant, so an
+#   auto  (default): record the sign-off requirement and auto-grant, so an
 #                     unattended run never hangs; the audit still shows the gate.
-#   human           — post the request and wait for a human APPROVE in the room
+#   human          : post the request and wait for a human APPROVE in the room
 #                     (used for the recorded demo, so a real keystroke shows).
-#   off             — no gate at all.
+#   off            : no gate at all.
 DEPLOY_APPROVAL = os.environ.get("DEPLOY_APPROVAL", "auto").strip().lower()
 APPROVAL_TIMEOUT = 180   # in human mode, fall back to auto-grant after this
 
@@ -298,7 +298,7 @@ class Maestro:
         MAX_WRITE_TRIES — with an increasingly explicit instruction."""
         before = self._site_mtime()
         # The Soloist may do the work (write the file) but its chat ACK can get
-        # lost in Band — so a reply timeout is NOT a failure if the file changed.
+        # lost in Band: so a reply timeout is NOT a failure if the file changed.
         # Treat the file artifact as the source of truth: stop waiting as soon as
         # the file appears, and don't fail on a lost ACK.
         wrote = lambda: self._site_mtime() > before
@@ -308,11 +308,11 @@ class Maestro:
             summary = "(no chat reply — checking the file artifact instead)"
         for attempt in range(2, MAX_WRITE_TRIES + 1):
             if self._site_mtime() > before:
-                return summary   # the file was (re)written — that's the real signal
+                return summary   # the file was (re)written: that's the real signal
             # The file wasn't rewritten THIS round. That's only a failure if no
             # page exists at all (the first write never landed). On a later round,
             # a Soloist that judges the page already correct legitimately doesn't
-            # rewrite — insisting then just spins the loop to max rounds. So if a
+            # rewrite: insisting then just spins the loop to max rounds. So if a
             # non-empty page is already on disk, accept it instead of insisting.
             if self._site_bytes() > 0:
                 log("write", "soloist didn't rewrite, but a page already exists — accepting")
@@ -358,7 +358,7 @@ class Maestro:
                       r"FAIL\w*|NOT WORK\w*)\b", re.I)
     # "no problems", "without bugs", "zero issues", "nothing missing", and the
     # adjacent forms a reviewer uses while confirming a page is fine ("no
-    # truncation", "no broken links", "no missing fonts") — a NEGATED negative is
+    # truncation", "no broken links", "no missing fonts"): a NEGATED negative is
     # actually positive, so strip these before scanning. The optional middle word
     # must NOT be greedy enough to swallow the negative itself, so it's an
     # explicit "(word )?" rather than "\w*".
@@ -493,14 +493,14 @@ class Maestro:
             await asyncio.sleep(POLL_INTERVAL)
 
     async def run(self, brief: str, room: str = "") -> dict:
-        # Everything runs in ONE chat (the command room) — no per-project rooms.
+        # Everything runs in ONE chat (the command room): no per-project rooms.
         self.room = room or self.room
         # baseline: ignore all prior messages so we only read THIS run's replies
         self.seen_ids = {m.id for m in await self._room_messages(self.room)}
 
         # CRASH-PROOF RESUME: look for a checkpoint from a prior crashed run of
         # this exact brief. If found, restore its state and skip the phases that
-        # already completed — the run picks up where it died, no rework.
+        # already completed: the run picks up where it died, no rework.
         self._run_key = self._run_id(brief)
         self._brief = brief
         prior = await load_checkpoint(ARCHIVIST_TOKEN, self._run_key)
@@ -525,14 +525,14 @@ class Maestro:
         for a in ("conductor", "soloist", "tuningfork", "stagetech", "archivist"):
             await self._tok_delta(a)
         # Make the run visible on the dashboard immediately (before the first
-        # agent reply) and survive a restart — state lives in mgi-mind.
+        # agent reply) and survive a restart: state lives in mgi-mind.
         await update_active(ARCHIVIST_TOKEN, self._run_key, brief, "running",
                             datetime.now(timezone.utc).isoformat())
         await self._push_live("running", "rider")
 
-        # PHASE 0 — Resource Contract (the "give this, go rest" magic moment).
+        # PHASE 0: Resource Contract (the "give this, go rest" magic moment).
         # The Conductor INFERS from the brief the one upfront list of access the
-        # project needs — credentials, services, integrations — instead of us
+        # project needs (credentials, services, integrations), not hardcoded
         # hardcoding it. Maestro records it and reports it back to the human so
         # they grant access once, then step away.
         if not self._resumed("rider"):
@@ -555,7 +555,7 @@ class Maestro:
             await self._save("rider")
             await self._push_live("running", "plan")
 
-        # PHASE 1 — plan (Archivist feeds planning skills)
+        # PHASE 1: plan (Archivist feeds planning skills)
         if not self._resumed("plan"):
             plan = await self.ask_with_skills("conductor",
                 f"Brief from the human: {brief}\nProduce a short build plan (3-5 steps). "
@@ -566,7 +566,7 @@ class Maestro:
             await self._save("plan")
             await self._push_live("running", "code-review")
 
-        # PHASE 2/3 — code <-> review negotiation (Archivist feeds design/css/antislop skills)
+        # PHASE 2/3: code <-> review negotiation (Archivist feeds design/css/antislop skills)
         self._phase = "code-review"
         if self._resumed("code-review"):
             verdict = result.get("review_verdict", "unknown")
@@ -586,7 +586,7 @@ class Maestro:
                 self.record("soloist", "code", _clean(code_summary),
                             {"round": rnd, "tokens": await self._tok_delta("soloist", code_summary)})
                 await self._push_live("running", "code-review")
-                # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
+                # Tuning Fork reads the files itself (list_files/read_file): no code in chat.
                 review = await self.ask_with_skills("tuningfork",
                     f"The Soloist finished work for the brief: {brief}\n"
                     f"Read the workspace files yourself and review. "
@@ -605,7 +605,7 @@ class Maestro:
                 code_task = f"The reviewer found issues: {review}\nFix them with write_page and reply with a one-line summary."
 
             # If we ran out of rounds with issues still open, ship the valid page
-            # but say so honestly — don't pass it off as clean.
+            # but say so honestly: don't pass it off as clean.
             if verdict != "clean":
                 open_issues = self._count_issues(last_review)
                 verdict = f"shipped-with-{open_issues}-open-issues"
@@ -617,13 +617,13 @@ class Maestro:
             self._done.add("code-review")
             await self._save("code-review")
 
-        # PHASE 4 — deploy. If the deploy gate refuses (invalid/truncated page),
-        # bounce back to the Soloist to rebuild, then retry — don't ship junk.
+        # PHASE 4: deploy. If the deploy gate refuses (invalid/truncated page),
+        # bounce back to the Soloist to rebuild, then retry: don't ship junk.
         # SELF-LEARNING LOOP: on a refusal we (1) reduce it to a stable signature,
         # (2) RECALL whether memory already solved this class of failure and feed
         # that fix to the Soloist, (3) on a successful rebuild LEARN the fix back
         # as a verified procedure. Next run recalls it instead of re-grinding.
-        # PHASE 3.5 — risk-gated human approval. High-stakes briefs (the resource
+        # PHASE 3.5: risk-gated human approval. High-stakes briefs (the resource
         # contract needs real external access) require a human sign-off before
         # anything ships; benign ones pass straight through. Either way the gate
         # decision is recorded, so the audit trail shows who authorised the deploy.
@@ -637,7 +637,7 @@ class Maestro:
             deploy = result.get("deploy", "")
         else:
             deploy = await self._deploy_phase(brief)
-            # A gate refusal / timeout has no pages.dev URL — that's a real
+            # A gate refusal / timeout has no pages.dev URL: that's a real
             # failure. Don't checkpoint deploy as done or report it as success;
             # raise so the run is honestly marked failed and can be retried.
             if "pages.dev" not in deploy:
@@ -653,7 +653,7 @@ class Maestro:
             await self._save("deploy")
             await self._push_live("running", "archive")
 
-        # PHASE 5 — archive
+        # PHASE 5: archive
         self._phase = "archive"
         if not self._resumed("archive"):
             archive = await self.ask("archivist",
@@ -663,7 +663,7 @@ class Maestro:
                         {"tokens": await self._tok_delta("archivist", archive)})
             self._done.add("archive")
 
-        # run finished cleanly — mark the checkpoint done so a re-run starts fresh
+        # run finished cleanly: mark the checkpoint done so a re-run starts fresh
         self._result["_finished"] = True
         await self._save("done")
         self._dump_replay(brief)
@@ -756,7 +756,7 @@ class Maestro:
             log("phase", f"deploy refused — {sig}")
 
             # (1) recall a known fix for this failure class. Keep only playbooks
-            # whose stored error is actually about deploying — semantic recall can
+            # whose stored error is actually about deploying: semantic recall can
             # drag in unrelated high-trust procedures, and a wrong "known fix"
             # is worse than none.
             playbooks = await recall_playbook(ARCHIVIST_TOKEN, error=sig, context=brief)

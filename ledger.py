@@ -33,7 +33,7 @@ import urllib.request
 _PAGE_KINDS = {"code"}          # the Soloist wrote the page file
 _DEPLOY_KINDS = {"deploy"}      # the Stage Tech shipped a live URL
 _CHECK_KINDS = {"review"}       # the Tuning Fork ran a deterministic check
-# kinds that are internal decisions — real, attributed, hash-chained, but with
+# kinds that are internal decisions: real, attributed, hash-chained, but with
 # no external artifact to point at, so they don't count toward the ratio.
 _ATTESTED_KINDS = {"brief", "rider", "plan", "archive", "recall", "learn", "skills", "approval"}
 
@@ -95,7 +95,7 @@ def ground_event(ev: dict, *, verify_url=_default_verify_url,
 
     if kind in _PAGE_KINDS:
         # the page file is the artifact. If the run deployed successfully, the
-        # live URL already proves the page existed — ground it transitively so
+        # live URL already proves the page existed: ground it transitively so
         # a replayed/old run isn't penalised for a since-overwritten workspace.
         if deploy_live:
             return {"status": "grounded", "artifact": "page",

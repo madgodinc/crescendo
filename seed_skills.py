@@ -32,7 +32,7 @@ HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json
 
 # library -> list of skill snippets. Each snippet is one focused, actionable rule.
 # fetch_skills pulls the top-3 SEMANTICALLY relevant per library per task, so a
-# bigger, well-scoped pool means a sharper match to each brief — not noise.
+# bigger, well-scoped pool means a sharper match to each brief: not noise.
 SKILLS = {
     "skill-design": [
         "Color: pick ONE accent color and 2-3 neutrals. Use a near-black (#1a1a1a) for text "

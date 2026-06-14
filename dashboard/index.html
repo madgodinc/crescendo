@@ -31,7 +31,7 @@
     -webkit-font-smoothing:antialiased;
   }
   code, .mono, .ev .ts, .count, .run .rid { font-family:var(--mono); }
-  /* scanlines + vignette — sci-fi atmosphere, near-free */
+  /* scanlines + vignette: sci-fi atmosphere, near-free */
   body::after {
     content:""; position:fixed; inset:0; z-index:50; pointer-events:none;
     background:
@@ -85,7 +85,7 @@
   .stage { position:relative; overflow:hidden; }
   #graph { position:absolute; inset:0; width:100%; height:100%; display:block; }
 
-  /* "NOW" hero — what the orchestra is doing this instant */
+  /* "NOW" hero: what the orchestra is doing this instant */
   .now { position:absolute; top:20px; left:50%; transform:translateX(-50%);
          display:flex; align-items:center; gap:11px; padding:9px 18px; border-radius:30px;
          background:rgba(16,22,38,.7); border:1px solid var(--line); backdrop-filter:blur(10px);
@@ -100,7 +100,7 @@
   .now .wave i:nth-child(4){ animation-delay:.45s }
   @keyframes eq { 0%,100%{ height:4px } 50%{ height:14px } }
 
-  /* idle hero — inviting first impression over the breathing orbs */
+  /* idle hero: inviting first impression over the breathing orbs */
   .idle { position:absolute; top:50%; left:50%; transform:translate(-50%,calc(-50% - 4px));
           text-align:center; pointer-events:none; opacity:0; transition:opacity .4s; z-index:3; }
   .idle.show { opacity:1; }
@@ -112,7 +112,7 @@
   .idle-cmd .prompt { color:var(--maestro); margin-right:8px; }
   .idle-cmd .arg { color:var(--soloist); }
 
-  /* human-approval gate banner — shown while the run pauses for sign-off */
+  /* human-approval gate banner: shown while the run pauses for sign-off */
   .approval { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
               text-align:center; opacity:0; pointer-events:none; transition:opacity .4s;
               z-index:5; max-width:440px; padding:26px 30px; border-radius:18px;
@@ -357,7 +357,7 @@ function drawIcon(ctx, id, x, y, s, col, a) {
     P([[0.34,0.25],[0.62,0.6],[0.18,0.42]]); ctx.stroke();                    // fin R
   } else if (id==='archivist') {         // stacked memory layers (the brain/store)
     for (let i=-1;i<=1;i++){ ctx.beginPath(); ctx.ellipse(0, i*0.32*s, 0.62*s, 0.2*s, 0, 0, 7); ctx.stroke(); }
-  } else {                               // human / fallback — a simple ring
+  } else {                               // human / fallback: a simple ring
     ctx.beginPath(); ctx.arc(0,0, 0.5*s, 0, 7); ctx.stroke();
   }
   ctx.restore();
@@ -388,13 +388,13 @@ const Graph = (() => {
     layout();
   }
   function layout() {
-    // hexagon: all six agents are PEERS on the ring — no centre hub, no permanent
+    // hexagon: all six agents are PEERS on the ring: no centre hub, no permanent
     // edges. Connections are drawn only while two agents are actually talking.
     const cx=W*0.5, cy=H*0.47, R=Math.min(W, H-80)*0.38;
     const cnt = nodes.length || 1;
     nodes.forEach((n,k) => {
       n.r = Math.max(26, R*0.165);
-      if (n.pinX != null) {            // user dragged this one — keep it (fraction of W/H)
+      if (n.pinX != null) {            // user dragged this one: keep it (fraction of W/H)
         n.x = n.pinX*W; n.y = n.pinY*H;
         n.ang = Math.atan2(n.y-cy, n.x-cx);
         return;
@@ -404,7 +404,7 @@ const Graph = (() => {
     });
   }
   function setAgents(agents) {
-    // Maestro is a peer on the hexagon, not a centre — order so the ring reads well.
+    // Maestro is a peer on the hexagon, not a centre: order so the ring reads well.
     nodes = [{ id:'maestro', label:'Maestro', role:'conducts', glow:0, pulse:0, ph:0 }]
       .concat(agents.map((a,i) => ({ id:a.id, label:a.label, role:a.role, glow:0, pulse:0, ph:i+1 })));
     links = []; particles = []; intro = 0;
@@ -424,7 +424,7 @@ const Graph = (() => {
 
   // honest routing: who actually talks to whom for each event kind.
   // control flow goes through Maestro; the Archivist's skill/recall/learn data
-  // flow goes DIRECTLY to the worker it feeds (no Maestro hop) — that's the truth
+  // flow goes DIRECTLY to the worker it feeds (no Maestro hop): that's the truth
   // the old pure-star hid.
   function route(actor, kind, meta) {
     if (kind === 'skills' && meta && meta.to) return ['archivist', meta.to];
@@ -445,7 +445,7 @@ const Graph = (() => {
     link(from, to, COLOR[from] || '#88a');
     if (kind==='deploy') celebrate();
   }
-  function celebrate() {  // deploy = the climax — burst from the Stage Tech node
+  function celebrate() {  // deploy = the climax: burst from the Stage Tech node
     const s = node('stagetech');
     const sx = s ? s.x : W/2, sy = s ? s.y : H/2;
     if (s) { s.glow = 1.6; s.pulse = 1.6; }
@@ -465,7 +465,7 @@ const Graph = (() => {
                        lane:(Math.random()-.5), delay:i*0.05, trail:[] });
     }
   }
-  // one repeating wave down an active link — a tight pulse of dots so the thread
+  // one repeating wave down an active link: a tight pulse of dots so the thread
   // reads as a continuous, looping flow for as long as the hand-off is active.
   function emitWave(from, to, col) {
     for (let i=0;i<5;i++) {
@@ -475,7 +475,7 @@ const Graph = (() => {
   }
   const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
   const easeOutCubic = t => 1-Math.pow(1-t,3);
-  // fractional Brownian motion — layered sines for organic, non-mechanical drift
+  // fractional Brownian motion: layered sines for organic, non-mechanical drift
   const fbm = (x, t) => Math.sin(x+t)*0.5 + Math.sin(x*2.1+t*1.7)*0.25 + Math.sin(x*4.3+t*0.6)*0.125;
   // a curved channel from hub m to node n: control point offset perpendicular so
   // edges arc instead of being straight 8-bit lines (Gephi-style bezier).
@@ -602,7 +602,7 @@ const Graph = (() => {
       bloomDisc(n.x,n.y, r*(2.4+n.pulse*1.1), col, (0.04+n.glow*0.09));
       ctx.globalCompositeOperation = 'source-over';
 
-      // dark base disc — gives the orb a solid body and punches a void under the
+      // dark base disc: gives the orb a solid body and punches a void under the
       // additive glow so the rim reads as a lit shell, not a fuzzy gumdrop.
       ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU);
       ctx.fillStyle = 'rgba(8,11,20,0.82)'; ctx.fill();
@@ -616,7 +616,7 @@ const Graph = (() => {
       g.addColorStop(1, hex(col, 0.0));
       ctx.globalCompositeOperation = 'lighter';
       ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU); ctx.fillStyle = g; ctx.fill();
-      // off-center specular highlight — the glassy hot-spot that makes it a sphere
+      // off-center specular highlight: the glassy hot-spot that makes it a sphere
       const hl = ctx.createRadialGradient(n.x-r*0.32, n.y-r*0.34, 0, n.x-r*0.32, n.y-r*0.34, r*0.6);
       hl.addColorStop(0, `rgba(255,255,255,${0.22+n.glow*0.2})`); hl.addColorStop(1,'rgba(255,255,255,0)');
       ctx.fillStyle = hl; ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU); ctx.fill();
@@ -625,7 +625,7 @@ const Graph = (() => {
       ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU);
       ctx.lineWidth = (isHub?2:1.5) + n.glow*2; ctx.strokeStyle = hex(col, 0.75*lum); ctx.stroke();
 
-      if (isHub) { // hub: twin counter-rotating dashed rings — a conductor's halo
+      if (isHub) { // hub: twin counter-rotating dashed rings: a conductor's halo
         for (const [rad,dir,dash,al] of [[1.22,1,[2,12],0.28],[1.42,-1,[2,20],0.18]]) {
           ctx.save(); ctx.translate(n.x,n.y); ctx.rotate(T*0.3*dir);
           ctx.beginPath(); ctx.arc(0,0, r*rad, 0, 7);
@@ -778,7 +778,7 @@ function step(animate) {
   div.style.setProperty('--actor', col);
   let txt = (e.text || '').replace(/</g,'&lt;');
   // strip routing noise the models echo back: @[[uuid]] mentions and bare
-  // @handles (incl. the human's real handle) — the actor is already labelled.
+  // @handles (incl. the human's real handle): the actor is already labelled.
   txt = txt.replace(/@\[\[[^\]]+\]\]/g, '').replace(/@[\w.-]+/g, '').replace(/^\s+/, '');
   txt = txt.replace(/(https:\/\/[a-z0-9.-]+\.pages\.dev)/i, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   div.innerHTML =
@@ -895,7 +895,7 @@ async function boot() {
     // offline: prefer the inlined recorded run (works from file://), else fetch.
     let data = window.CRESCENDO_REPLAY || null;
     if (!data) data = await fetch('replay.json').then(r=>r.json()).catch(()=>null);
-    if (!data) { el('feed').innerHTML='<div class="ev"><div class="txt">No data — run serve.py (live) or maestro.py.</div></div>'; return; }
+    if (!data) { el('feed').innerHTML='<div class="ev"><div class="txt">No data. Run serve.py (live) or maestro.py.</div></div>'; return; }
     loadDoc({ ...data, status:'done', phase:'done' });
     setStatus('offline');
     // offline vitrine: point the audit + flywheel buttons at pre-rendered static pages

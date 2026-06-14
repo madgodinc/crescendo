@@ -31,13 +31,13 @@
   <div class="sub">Every time the orchestra recovers from a failure, it writes the fix to memory.
      Next time that class of problem appears, it recalls the fix instead of rediscovering it,
      so it gets cheaper and more accurate the longer it runs. The numbers below are operational
-     stats over the 7 recorded runs on this instance, not a
-     benchmark — small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
+     stats over the 10 recorded runs on this instance, not a
+     benchmark. Small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
   <div class="stats">
-    <div class="stat gold"><div class="num">7</div><div class="lbl">Runs</div></div>
-    <div class="stat g"><div class="num">14%</div><div class="lbl">Shipped clean</div></div>
-    <div class="stat p"><div class="num">~240375</div><div class="lbl">Avg tokens / run</div></div>
-    <div class="stat"><div class="num">1766s</div><div class="lbl">Avg wall-clock</div></div>
+    <div class="stat gold"><div class="num">10</div><div class="lbl">Runs</div></div>
+    <div class="stat g"><div class="num">10%</div><div class="lbl">Shipped clean</div></div>
+    <div class="stat p"><div class="num">~224944</div><div class="lbl">Avg tokens / run</div></div>
+    <div class="stat"><div class="num">1294s</div><div class="lbl">Avg wall-clock</div></div>
     <div class="stat g"><div class="num">3</div><div class="lbl">Fixes learned</div></div>
   </div>
   <h2>Learned <span class="c">fixes</span> · procedural memory</h2>
@@ -45,11 +45,11 @@
     <thead><tr><th>Trust</th><th>Failure signature</th><th>Verified fix</th></tr></thead>
     <tbody>
       <tr><td class="v">✓ verified</td>
-          <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
-          <td class="fix">strip base64, rebuild via write_page, ensure &lt;/html&gt;</td></tr>
-      <tr><td class="v">✓ verified</td>
           <td class="err">deploy gate refused page failed validation</td>
           <td class="fix">Rebuild the page with write_page (fixed HTML shell, slots only); strip base64/favicon/icon links; ensure the page is complete and ends in &lt;/html&gt; before deploy.</td></tr>
+      <tr><td class="v">✓ verified</td>
+          <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
+          <td class="fix">strip base64, rebuild via write_page, ensure &lt;/html&gt;</td></tr>
       <tr><td class="v">✓ verified</td>
           <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
           <td class="fix">strip base64/favicon, rebuild via write_page, ensure ends &lt;/html&gt;</td></tr></tbody></table></div>
@@ -57,12 +57,21 @@
   <div class="card"><table>
     <thead><tr><th>Brief</th><th>Verdict</th><th>Tokens</th><th>Time</th></tr></thead>
     <tbody>
+      <tr><td>Build a contact page for a design studio called </td>
+          <td class="warn">running</td>
+          <td class="num">~265865</td><td class="num">207s</td></tr>
+      <tr><td>Build a SaaS pricing page for a tool called Flow</td>
+          <td class="warn">done</td>
+          <td class="num">~254196</td><td class="num">253s</td></tr>
+      <tr><td>Build a minimalist photography portfolio page fo</td>
+          <td class="warn">done</td>
+          <td class="num">~168502</td><td class="num">749s</td></tr>
+      <tr><td>Build a dark-themed pomodoro timer page with a 2</td>
+          <td class="warn">done</td>
+          <td class="num">~63804</td><td class="num">453s</td></tr>
       <tr><td>Build a landing page for a tea house called Stee</td>
           <td class="warn">done</td>
           <td class="num">~198739</td><td class="num">198s</td></tr>
-      <tr><td>Build a landing page for an indie bookstore call</td>
-          <td class="warn">running</td>
-          <td class="num">~185553</td><td class="num">1087s</td></tr>
       <tr><td>Build a clean landing page for a coffee shop cal</td>
           <td class="warn">done</td>
           <td class="num">~138833</td><td class="num">7270s</td></tr>

@@ -1,4 +1,4 @@
-"""Crescendo dashboard server — a read-only vitrine on top of the live run.
+"""Crescendo dashboard server: a read-only vitrine on top of the live run.
 
 Serves the static dashboard files AND proxies three read-only JSON endpoints to
 mgi-mind's KV store, adding the bearer token server-side. The dashboard is a
@@ -48,7 +48,7 @@ LIVE_MARKER = "CRESCENDO_LIVE"
 ACTIVE_KEY = "CRESCENDO_ACTIVE"
 # A live run pushes a heartbeat (the doc's `updated` time) on every step. If a
 # run is still marked "running" but hasn't been touched in this long, its driver
-# died (crash / kill / hung provider) — show it as stale, not active, so dead
+# died (crash / kill / hung provider): show it as stale, not active, so dead
 # runs never sit forever in the dashboard. The threshold must clear the longest
 # legitimate gap between heartbeats: a reply wait (REPLY_TIMEOUT 130s) plus one
 # retry, so a slow-but-alive run isn't falsely flagged. A killed run never
@@ -97,7 +97,7 @@ def _kv_get(key: str):
 
 
 def learned_fixes():
-    """Parse the procedural playbooks the self-learning LOOP wrote (only those —
+    """Parse the procedural playbooks the self-learning LOOP wrote (only those
     the procedure store also holds unrelated dev notes, so keep just the ones
     whose source is the deploy gate)."""
     try:
@@ -182,7 +182,7 @@ def render_audit(doc: dict) -> str:
     Every decision in the run's attributed timeline is shown with its author,
     phase, real content, timestamp and token cost. A SHA-256 hash chain links
     the events (each hash folds in the previous one), so any edit to a past
-    decision breaks every hash after it — the trail is verifiable, not asserted.
+    decision breaks every hash after it, so the trail is verifiable, not asserted.
     """
     tl = doc.get("timeline", [])
     brief = doc.get("brief", "")
@@ -192,7 +192,7 @@ def render_audit(doc: dict) -> str:
     # Grounding pass: a deterministic, report-only check that every claim
     # pointing at an external artifact (a page, a deploy URL, a check result)
     # actually has one. Format-only URL check keeps the report render fast and
-    # deterministic — the URL is in the trail only because deploy_site returned
+    # deterministic: the URL is in the trail only because deploy_site returned
     # it after its own validation, so trusting its shape here is honest.
     grd = ground_run(doc, verify_url=lambda u: "format-valid")
     gmark = {"grounded": ('<span class="vb gnd" title="claim backed by a real artifact">grounded</span>'),
@@ -307,8 +307,8 @@ def render_audit(doc: dict) -> str:
     Editing any past decision changes its hash and every hash after it, so the trail is tamper-evident.
     Source of record: the mgi-mind memory ledger, where each agent writes under its own token.
     <br><b style="color:var(--ink)">Grounded, not just attested:</b> {grd['grounded']} of {grd['total_claims']}
-    claims that point at an external artifact — a written page, a live deploy URL, a deterministic check
-    result — were verified to actually have one. The hash chain proves no decision was altered; grounding
+    claims that point at an external artifact (a written page, a live deploy URL, a deterministic check
+    result) were verified to actually have one. The hash chain proves no decision was altered; grounding
     proves no agent claimed an artifact it never produced. ({grd['attested']} internal decisions carry no
     external artifact and are attested by author + hash only.)
   </div>
@@ -326,7 +326,7 @@ def render_flywheel(active: dict) -> str:
       <tr><td class="v">{'✓ verified' if f['verified'] else '· unverified'}</td>
           <td class="err">{e(f['error'])}</td>
           <td class="fix">{e(f['fix'])}</td></tr>""" for f in fixes) or \
-        '<tr><td colspan="3" class="empty">No fixes learned yet — they appear after the orchestra recovers from a deploy failure.</td></tr>'
+        '<tr><td colspan="3" class="empty">No fixes learned yet. They appear after the orchestra recovers from a deploy failure.</td></tr>'
     run_rows = "".join(f"""
       <tr><td>{e((r.get('brief') or r.get('run_id'))[:48])}</td>
           <td class="{'ok' if r['clean'] else 'warn'}">{'clean' if r['clean'] else (r.get('status') or '—')}</td>
@@ -366,7 +366,7 @@ def render_flywheel(active: dict) -> str:
      Next time that class of problem appears, it recalls the fix instead of rediscovering it,
      so it gets cheaper and more accurate the longer it runs. The numbers below are operational
      stats over the {stats['n']} recorded run{'s' if stats['n'] != 1 else ''} on this instance, not a
-     benchmark — small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
+     benchmark. Small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
   <div class="stats">
     <div class="stat gold"><div class="num">{stats['n']}</div><div class="lbl">Runs</div></div>
     <div class="stat g"><div class="num">{stats['clean_pct']}%</div><div class="lbl">Shipped clean</div></div>
@@ -409,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_file(self, rel: str):
-        # Resolve inside the dashboard dir only — reject traversal.
+        # Resolve inside the dashboard dir only: reject traversal.
         path = os.path.normpath(os.path.join(DASHBOARD_DIR, rel))
         if not path.startswith(DASHBOARD_DIR) or not os.path.isfile(path):
             self.send_error(404, "not found")
@@ -468,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/flywheel":
                 return self._send_html(render_flywheel(_kv_get(ACTIVE_KEY) or {}))
         except Exception as e:
-            # mgi-mind unreachable / bad reply — tell the front-end, don't hang.
+            # mgi-mind unreachable / bad reply: tell the front-end, don't hang.
             return self._send_json({"error": f"memory unreachable: {e}"}, status=502)
 
         # static

@@ -65,7 +65,7 @@ class AutoReplyLangGraphAdapter(LangGraphAdapter):
 
         # fallback delivery: model produced text but never sent it. A lost reply
         # is what makes the Maestro wait out a full timeout, so retry once before
-        # giving up — a transient Band hiccup shouldn't strand the reply.
+        # giving up: a transient Band hiccup shouldn't strand the reply.
         if not sent["any"] and final_text["v"]:
             log = logging.getLogger("agents")
             for attempt in (1, 2):
@@ -120,7 +120,7 @@ load_dotenv("/home/madgodinc/code/crescendo/.env")
 FEATHERLESS = (os.environ["FEATHERLESS_BASE_URL"], os.environ["FEATHERLESS_API_KEY"])
 AIMLAPI = (os.environ["AIMLAPI_BASE_URL"], os.environ["AIMLAPI_API_KEY"])
 # Optional top-tier provider for the comparison/turbo tier (LLM_TIER=turbo).
-# The sponsor APIs (Featherless / AIMLAPI) remain the default — this is only a
+# The sponsor APIs (Featherless / AIMLAPI) remain the default: this is only a
 # benchmark lever to measure the quality/speed delta vs a frontier model.
 _OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI = (os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), _OPENAI_KEY)
@@ -130,13 +130,13 @@ GEMINI = (os.environ.get("GEMINI_BASE_URL",
           "https://generativelanguage.googleapis.com/v1beta/openai"), _GEMINI_KEY)
 # Default tier: OpenAI (reliable, no daily cap) if its key is set, else Gemini,
 # else the sponsor path. Gemini's free tier is 20 requests/day/model, enough for
-# a demo but it runs dry under repeated testing — use LLM_TIER=gemini when the
+# a demo but it runs dry under repeated testing: use LLM_TIER=gemini when the
 # daily quota is fresh. Override with LLM_TIER=sponsor|gemini.
 LLM_TIER = os.environ.get(
     "LLM_TIER",
     "openai" if _OPENAI_KEY else ("gemini" if _GEMINI_KEY else "sponsor")).strip().lower()
 
-# Every role is told to use band_send_message to reply — the LangGraph adapter
+# Every role is told to use band_send_message to reply: the LangGraph adapter
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
 REPLY_RULE = (
     "To reply, you MUST call the band_send_message tool — plain text is NOT sent. "
@@ -152,7 +152,7 @@ REPLY_RULE = (
 # but never called write_page → a stale page shipped). Qwen2.5-72B-Instruct is
 # the one that reliably emits tool calls, so every tool-using role runs on it.
 # DeepSeek-V3.1 is fine for the Conductor (plan text, no tools). AIMLAPI is the
-# cross-provider fallback (it was down — Cloudflare 522 — on 2026-06-14).
+# cross-provider fallback (it was down, Cloudflare 522, on 2026-06-14).
 # 2026-06-14 PM: Featherless began rate-limiting hard (429 storms stalling runs);
 # AIMLAPI recovered. Flip primary->AIMLAPI (gpt-4o is a reliable tool-caller),
 # Featherless->fallback. Both providers are wired so whichever is healthy wins.
@@ -175,7 +175,7 @@ if LLM_TIER == "gemini" and _GEMINI_KEY:
     GPT4O = DSCHAT = GEM
     FB_QWEN72 = FB_DEEPSEEK = OAI       # OpenAI as the cross-provider fallback
 elif LLM_TIER == "openai" and _OPENAI_KEY:
-    GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI — fast, passes the gate
+    GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI: fast, passes the gate
     DSCHAT = (OPENAI, "gpt-4o")
     FB_QWEN72 = FB_DEEPSEEK = FB_MISTRAL   # sponsor Mistral as the working fallback
 
@@ -248,7 +248,7 @@ class TokenTrackingChatOpenAI(ChatOpenAI):
         self._bump(result)
         return result
 
-    # the LangGraph agent streams via _astream — usage rides the LAST chunk
+    # the LangGraph agent streams via _astream: usage rides the LAST chunk
     async def _astream(self, *a, **k):
         async for chunk in super()._astream(*a, **k):
             u = getattr(getattr(chunk, "message", None), "usage_metadata", None)
@@ -274,7 +274,7 @@ def _llm(spec, agent_name="agent", mind_token=""):
     (base_url, api_key), model = spec
     extra = {}
     # Gemini 2.5 'thinking' burns the whole token budget before it writes any
-    # output — turn it off so the model spends its budget on the actual answer.
+    # output: turn it off so the model spends its budget on the actual answer.
     if "gemini" in model.lower():
         extra["model_kwargs"] = {"reasoning_effort": "none"}
     # max_tokens is reserved against the per-minute token budget, so an 8k
@@ -290,7 +290,7 @@ def build(prefix, primary, fallback, role) -> Agent:
     # actor id used in the dashboard timeline (CONDUCTOR -> conductor, TUNING_FORK -> tuningfork)
     actor = prefix.lower().replace("_", "")
     mtok = os.environ[f"MGIMIND_TOKEN_{prefix}"]
-    # primary with a fallback model — survives a provider outage transparently;
+    # primary with a fallback model: survives a provider outage transparently;
     # both track tokens to the same per-agent counter.
     llm = _llm(primary, actor, mtok).with_fallbacks([_llm(fallback, actor, mtok)])
     tools = build_memory_tools(mtok)
