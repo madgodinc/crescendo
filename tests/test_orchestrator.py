@@ -151,3 +151,29 @@ class TestCleanSlot:
     def test_keeps_normal_markup(self):
         out = deploy_tools._clean_slot("<h1>Hello</h1><p>world</p>")
         assert "Hello" in out and "world" in out
+
+
+# ── acceptance audit: leaked secrets + placeholder text must hard-block ───────
+
+class TestStaticBlockChecks:
+    def test_openai_key_blocks(self):
+        out = deploy_tools._static_block_checks("var k='sk-abcdefghij1234567890XYZ';", "visible")
+        assert any("secret" in o for o in out)
+
+    def test_github_and_aws_keys_block(self):
+        assert deploy_tools._static_block_checks("ghp_abcdefghij1234567890abcd", "v")
+        assert deploy_tools._static_block_checks("AKIAIOSFODNN7EXAMPLE", "v")
+
+    def test_clean_page_has_no_secret_finding(self):
+        # ordinary markup with no key-shaped string passes
+        assert deploy_tools._static_block_checks("<h1>Ledger</h1><p>Budget app</p>", "Ledger Budget app") == []
+
+    def test_placeholder_text_blocks(self):
+        assert any("placeholder" in o for o in
+                   deploy_tools._static_block_checks("<h1>x</h1>", "Lorem ipsum dolor sit"))
+        assert any("placeholder" in o for o in
+                   deploy_tools._static_block_checks("<h1>x</h1>", "TODO finish this"))
+
+    def test_real_content_is_not_placeholder(self):
+        out = deploy_tools._static_block_checks("<h1>Vigor</h1>", "Vigor is a fitness app with a hero")
+        assert out == []

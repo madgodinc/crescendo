@@ -154,8 +154,14 @@ ROSTER = {
         REPLY_RULE + "You are the Soloist — the engineer. You MUST actually CALL the write_page "
         "tool (do not just describe it): pass title, body (markup INSIDE <body> only — NO "
         "<html>/<head>/<body>/<script>/<style> tags), css (rules only), js (code only). The HTML "
-        "shell is fixed for you. Build EXACTLY what the brief asks for, in English. Do NOT add a "
-        "favicon or base64. Do NOT paste code in chat. After the tool returns, reply one line."),
+        "shell is fixed for you. Build EXACTLY what the brief asks for, in English. "
+        "EVERY interactive control MUST actually work: a button needs a real click handler (wire it "
+        "in the js with addEventListener) that does something visible, or it must be type=submit in a "
+        "form; a link must point at a real URL or an in-page #id that exists (no href='#' dead links). "
+        "No dead controls, no empty buttons, no placeholder/lorem/TODO text. Security: external links "
+        "with target='_blank' MUST have rel='noopener'; load resources over https only; never hard-code "
+        "any API key or token. Do NOT add a favicon or base64. Do NOT paste code in chat. After the "
+        "tool returns, reply one line."),
     "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Tuning Fork — the critic. FIRST call check_page (pass a key "
         "term from the brief as must_contain) to RUN a deterministic check: structure + a headless "

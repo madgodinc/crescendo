@@ -114,6 +114,120 @@ def validate_site() -> list[str]:
     return problems
 
 
+# Injected before page scripts: tag every element that binds a click/submit
+# listener, so deadness is judged by real behaviour, not by guessing from source.
+_PROBE_JS = """
+(() => {
+  const orig = EventTarget.prototype.addEventListener;
+  EventTarget.prototype.addEventListener = function(type, fn, opts) {
+    try {
+      if (type === 'click' || type === 'submit') {
+        this.__crescBound = true;
+        if (this === document || this === document.body || this === window)
+          window.__crescDelegated = true;   // delegated handler covers children
+      }
+    } catch (e) {}
+    return orig.call(this, type, fn, opts);
+  };
+})();
+"""
+
+# Runs after render. Returns {block:[...], warn:[...]} from the live DOM.
+# block = high-precision, agent-fixable defects that must not ship; warn =
+# logged but allowed (cosmetic / commonly intentional on a demo).
+_AUDIT_JS = r"""
+(() => {
+  const block = [], warn = [];
+  const delegated = !!window.__crescDelegated;
+  const txt = el => (el.textContent || '').trim();
+
+  // 1. DEAD CONTROLS — behavioural, not static.
+  document.querySelectorAll('button').forEach(b => {
+    const label = txt(b) || b.getAttribute('aria-label') || b.title ||
+                  (b.querySelector('img') && b.querySelector('img').alt) || '';
+    if (!label) { block.push('empty button (no text / aria-label): a broken control'); return; }
+    // a bare <button> defaults to type=submit, but that only does anything
+    // inside a <form>; outside one it's still dead.
+    const submits = (b.type === 'submit' || b.type === 'reset') && b.closest('form');
+    const wired = b.hasAttribute('onclick') || b.__crescBound || delegated ||
+                  submits || b.closest('a[href]');
+    if (!wired) block.push('dead button "' + label.slice(0,40) + '" — no handler, does nothing on click');
+  });
+  document.querySelectorAll('a').forEach(a => {
+    const href = a.getAttribute('href');
+    const wired = a.hasAttribute('onclick') || a.__crescBound || delegated;
+    const dead = (href === null || href === '' || href === '#' || href === 'javascript:void(0)');
+    if (dead && !wired) warn.push('link "' + (txt(a)||'').slice(0,30) + '" goes nowhere (href="' + (href||'') + '")');
+    // in-page anchor whose target id is missing
+    if (href && href.startsWith('#') && href.length > 1 && !document.getElementById(href.slice(1)) && !wired)
+      warn.push('anchor ' + href + ' points at a section that does not exist');
+  });
+  document.querySelectorAll('form').forEach(f => {
+    const wired = f.hasAttribute('action') || f.__crescBound || f.hasAttribute('onsubmit') || delegated;
+    if (!wired) warn.push('form has no action and no submit handler — it goes nowhere');
+  });
+
+  // 4. target=_blank without rel=noopener — tab-nabbing.
+  document.querySelectorAll('a[target="_blank"]').forEach(a => {
+    const rel = (a.getAttribute('rel') || '').toLowerCase();
+    if (!rel.includes('noopener'))
+      block.push('target="_blank" link without rel="noopener" (tab-nabbing risk): ' + (a.getAttribute('href')||''));
+  });
+
+  // 8a. non-https subresources — mixed content, will be blocked by the browser.
+  document.querySelectorAll('script[src], link[href], img[src]').forEach(n => {
+    const u = n.getAttribute('src') || n.getAttribute('href') || '';
+    if (u.startsWith('http://')) block.push('insecure http:// resource (mixed content, browser will block): ' + u.slice(0,60));
+  });
+  // 7. plain external http links — warn only.
+  document.querySelectorAll('a[href^="http://"]').forEach(a => {
+    warn.push('external link uses insecure http://: ' + a.getAttribute('href').slice(0,50));
+  });
+
+  // 9. horizontal overflow — cosmetic, warn.
+  if (document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)
+    warn.push('page overflows horizontally (content wider than the viewport)');
+
+  // 10. images without alt — warn.
+  document.querySelectorAll('img:not([alt])').forEach(() =>
+    warn.push('an <img> has no alt attribute'));
+
+  // 11b. empty headings — warn.
+  document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h => {
+    if (!txt(h)) warn.push('an empty <' + h.tagName.toLowerCase() + '> heading');
+  });
+
+  return { block: [...new Set(block)].slice(0,10), warn: [...new Set(warn)].slice(0,10) };
+})();
+"""
+
+# 5. leaked-secret patterns — high precision only (curated, not "looks like a key").
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]{20,}"),
+    re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),
+]
+# 12. placeholder text left in the visible page — owner's "broken text" pain.
+_PLACEHOLDER = re.compile(r"lorem ipsum|your text here|insert[_ ]|\bTODO\b|\bFIXME\b|placeholder text|xxxxx", re.I)
+
+
+def _static_block_checks(html: str, visible: str) -> list[str]:
+    """Source-level hard blocks that don't need the DOM: leaked secrets and
+    placeholder text left in the rendered content."""
+    out = []
+    for pat in _SECRET_PATTERNS:
+        m = pat.search(html)
+        if m:
+            out.append(f"a secret-looking string is hard-coded in the page: {m.group(0)[:12]}… (remove it)")
+            break
+    pm = _PLACEHOLDER.search(visible)
+    if pm:
+        out.append(f"placeholder text left in the page: '{pm.group(0)}' (replace with real content)")
+    return out
+
+
 async def _render_check(must_contain: str = "") -> dict:
     """Headless-render the page and report what a browser actually sees: console
     errors, JS page errors, visible text length, and whether an expected term is
@@ -132,10 +246,15 @@ async def _render_check(must_contain: str = "") -> dict:
             pg = await b.new_page()
             pg.on("console", lambda m: console_errs.append(m.text) if m.type == "error" else None)
             pg.on("pageerror", lambda e: page_errs.append(str(e)))
+            # Instrument addEventListener BEFORE any page script runs, so we can
+            # tell at runtime which controls actually got a click/submit handler
+            # (static inspection can't see listeners, and misses event delegation).
+            await pg.add_init_script(_PROBE_JS)
             await pg.goto("file://" + index, wait_until="networkidle", timeout=15000)
             await pg.wait_for_timeout(400)
             text = (await pg.inner_text("body")).strip()
             present = (must_contain.lower() in (await pg.content()).lower()) if must_contain else True
+            audit = await pg.evaluate(_AUDIT_JS)
             await b.close()
     except Exception as e:
         return {"ok": False, "errors": [f"render failed: {e}"], "visible_chars": 0}
@@ -144,7 +263,16 @@ async def _render_check(must_contain: str = "") -> dict:
         errs.append(f"renders almost blank ({len(text)} visible chars)")
     if must_contain and not present:
         errs.append(f"expected content '{must_contain}' not found in the page")
-    return {"ok": not errs, "errors": errs, "visible_chars": len(text)}
+    # hard-block defects from the live DOM (the strict acceptance audit)
+    errs += audit.get("block", [])
+    # source-level hard blocks: leaked secrets + placeholder text in the page
+    try:
+        with open(index, encoding="utf-8") as f:
+            errs += _static_block_checks(f.read(), text)
+    except OSError:
+        pass
+    return {"ok": not errs, "errors": errs, "warnings": audit.get("warn", []),
+            "visible_chars": len(text)}
 
 
 async def _check_page(must_contain: str = "") -> str:
@@ -153,12 +281,15 @@ async def _check_page(must_contain: str = "") -> str:
     problems = validate_site()
     render = await _render_check(must_contain)
     all_errs = problems + render.get("errors", [])
+    warns = render.get("warnings", [])
+    warn_block = ("\nMinor (fix if quick, won't block the ship):\n- " + "\n- ".join(warns)) if warns else ""
     if all_errs:
-        return "CHECK FAILED:\n- " + "\n- ".join(all_errs)
+        return "CHECK FAILED — these must be fixed before shipping:\n- " + "\n- ".join(all_errs) + warn_block
     vc = render.get("visible_chars", 0)
     note = render.get("note", "")
-    return f"CHECK PASSED: valid structure, renders cleanly ({vc} visible chars, no console/JS errors)." \
-           + (f" [{note}]" if note else "")
+    return (f"CHECK PASSED: valid structure, every control works, no leaked secrets or placeholder "
+            f"text, renders cleanly ({vc} visible chars, no console/JS errors)."
+            + (f" [{note}]" if note else "") + warn_block)
 
 
 class CheckArgs(BaseModel):
