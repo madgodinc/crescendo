@@ -49,8 +49,11 @@ ACTIVE_KEY = "CRESCENDO_ACTIVE"
 # A live run pushes a heartbeat (the doc's `updated` time) on every step. If a
 # run is still marked "running" but hasn't been touched in this long, its driver
 # died (crash / kill / hung provider) — show it as stale, not active, so dead
-# runs never sit forever in the dashboard.
-STALE_AFTER_S = 150
+# runs never sit forever in the dashboard. The threshold must clear the longest
+# legitimate gap between heartbeats: a reply wait (REPLY_TIMEOUT 130s) plus one
+# retry, so a slow-but-alive run isn't falsely flagged. A killed run never
+# writes again, so it still trips reliably.
+STALE_AFTER_S = 300
 
 
 def _is_stale(updated: str) -> bool:

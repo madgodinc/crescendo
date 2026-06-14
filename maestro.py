@@ -241,6 +241,10 @@ class Maestro:
                 return "(work confirmed by artifact)"
             await asyncio.sleep(POLL_INTERVAL)
             waited += POLL_INTERVAL
+            # heartbeat while waiting on a slow agent, so the dashboard's stale
+            # check sees the run is alive (not a dead driver) even mid-wait.
+            if waited % 30 < POLL_INTERVAL and self._run_key:
+                await self._push_live("running", self._phase)
         raise TimeoutError(f"{from_key} did not reply within {REPLY_TIMEOUT}s")
 
     async def ask(self, to_key: str, text: str, retries: int = 1, done_check=None) -> str:
