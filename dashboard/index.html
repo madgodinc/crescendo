@@ -329,133 +329,173 @@ const Graph = (() => {
     }
   }
   const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+  // fractional Brownian motion — layered sines for organic, non-mechanical drift
+  const fbm = (x, t) => Math.sin(x+t)*0.5 + Math.sin(x*2.1+t*1.7)*0.25 + Math.sin(x*4.3+t*0.6)*0.125;
+  // a curved channel from hub m to node n: control point offset perpendicular so
+  // edges arc instead of being straight 8-bit lines (Gephi-style bezier).
+  function ctrl(m, n, bend) {
+    const mx=(m.x+n.x)/2, my=(m.y+n.y)/2, dx=n.x-m.x, dy=n.y-m.y, len=Math.hypot(dx,dy)||1;
+    return [mx + (-dy/len)*bend, my + (dx/len)*bend];
+  }
+  // point + tangent along the quadratic bezier at parameter t
+  function bez(m, cx, cy, n, t) {
+    const u=1-t;
+    const x = u*u*m.x + 2*u*t*cx + t*t*n.x;
+    const y = u*u*m.y + 2*u*t*cy + t*t*n.y;
+    return [x, y];
+  }
 
   function draw(now) {
-    const dt = Math.min((now - last)/1000 || 0, 0.05); last = now;  // seconds, frame-rate independent
-    intro = Math.min(1, intro + dt*1.1);
+    const dt = Math.min((now - last)/1000 || 0, 0.05); last = now;  // frame-rate independent
+    intro = Math.min(1, intro + dt*0.9);
     ctx.clearRect(0,0,W,H);
     const m = node('maestro'); if(!m) { requestAnimationFrame(draw); return; }
     const T = now/1000;
+    const ease = easeInOut(intro);
 
-    // ambient motes drifting in the void, faintly pulled toward the hub
+    // ── ambient nebula motes: fBM drift, additive so overlaps brighten ──
+    ctx.globalCompositeOperation = 'lighter';
     for (const p of motes) {
-      p.x += p.vx*dt; p.y += p.vy*dt;
-      const dx=m.x-p.x, dy=m.y-p.y, d=Math.hypot(dx,dy)||1;
-      p.vx += (dx/d)*2*dt; p.vy += (dy/d)*2*dt;
-      p.vx*=0.999; p.vy*=0.999;
-      if (p.x<0)p.x=W; if(p.x>W)p.x=0; if(p.y<0)p.y=H; if(p.y>H)p.y=0;
-      const tw = p.a*(0.6+0.4*Math.sin(T*1.5+p.ph));
-      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7);
-      ctx.fillStyle = `rgba(150,175,235,${tw})`; ctx.fill();
+      p.x += (p.vx + fbm(p.ph, T*0.3)*8)*dt;
+      p.y += (p.vy + fbm(p.ph+9, T*0.3)*8)*dt;
+      if (p.x<-20)p.x=W+20; if(p.x>W+20)p.x=-20; if(p.y<-20)p.y=H+20; if(p.y>H+20)p.y=-20;
+      const tw = p.a*(0.5+0.5*Math.sin(T*1.3+p.ph));
+      const g = ctx.createRadialGradient(p.x,p.y,0, p.x,p.y, p.r*4);
+      g.addColorStop(0, `rgba(150,180,255,${tw})`); g.addColorStop(1,'rgba(150,180,255,0)');
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(p.x,p.y,p.r*4,0,7); ctx.fill();
     }
-    // deploy shockwaves
+    ctx.globalCompositeOperation = 'source-over';
+
+    // store each node's curved-channel control point for this frame (particles reuse it)
+    nodes.forEach(n => { if(n.id!=='maestro'){
+      const bend = Math.sin(T*0.4 + n.ph)*14;                       // gently breathing arc
+      [n._cx, n._cy] = ctrl(m, n, bend);
+    }});
+
+    // ── deploy shockwaves (additive) ──
+    ctx.globalCompositeOperation = 'lighter';
     for (let i=shock.length-1;i>=0;i--){
       const s=shock[i]; s.t+=dt; const k=s.t/s.dur;
       if (k>=1){ shock.splice(i,1); continue; }
-      ctx.beginPath(); ctx.arc(s.x,s.y, s.t*s.speed, 0, 7);
-      ctx.strokeStyle = hex(s.col, (1-k)*0.5); ctx.lineWidth = 3*(1-k); ctx.stroke();
+      ctx.beginPath(); ctx.arc(s.x,s.y, easeOutCubic(k)*s.t*s.speed*(1/s.dur), 0, 7);
+      ctx.strokeStyle = hex(s.col, (1-k)*0.55); ctx.lineWidth = 4*(1-k); ctx.stroke();
     }
+    ctx.globalCompositeOperation = 'source-over';
 
-    // edges — channels with ambient shimmer + flow glow, grow in on intro
+    // ── channels: curved bezier tubes with additive bloom + travelling shimmer ──
+    ctx.globalCompositeOperation = 'lighter';
     nodes.filter(n=>n.id!=='maestro').forEach(n => {
       const e = edges[n.id] || {flow:0};
       const base = COLOR[n.id] || '#5566aa';
-      const ex = m.x + (n.x-m.x)*easeInOut(intro), ey = m.y + (n.y-m.y)*easeInOut(intro);
-      // outer soft tube
-      ctx.strokeStyle = hex(base, .04 + e.flow*.10);
-      ctx.lineWidth = 6 + e.flow*6; ctx.lineCap='round';
-      ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.lineTo(ex,ey); ctx.stroke();
-      // inner bright line + travelling shimmer
-      const grad = ctx.createLinearGradient(m.x,m.y,ex,ey);
-      const sh = (Math.sin(T*1.4 + n.ph)*0.5+0.5);
-      grad.addColorStop(Math.max(0,sh-.15), hex(base,.06+e.flow*.25));
-      grad.addColorStop(sh, hex(base,.22+e.flow*.5));
-      grad.addColorStop(Math.min(1,sh+.15), hex(base,.06+e.flow*.25));
-      ctx.strokeStyle = grad; ctx.lineWidth = 1.4 + e.flow*2.6;
-      ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.lineTo(ex,ey); ctx.stroke();
-      e.flow = Math.max(0, e.flow - dt*0.9);
+      const cx = m.x + (n._cx-m.x)*ease, cy = m.y + (n._cy-m.y)*ease;
+      const ex = m.x + (n.x-m.x)*ease, ey = m.y + (n.y-m.y)*ease;
+      const path = () => { ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.quadraticCurveTo(cx,cy,ex,ey); ctx.stroke(); };
+      ctx.lineCap='round';
+      // wide soft glow tube
+      ctx.strokeStyle = hex(base, .05 + e.flow*.10); ctx.lineWidth = 7 + e.flow*8; path();
+      // mid
+      ctx.strokeStyle = hex(base, .10 + e.flow*.20); ctx.lineWidth = 2.5 + e.flow*3; path();
+      // bright travelling shimmer core (a moving highlight along the channel)
+      const sh = (Math.sin(T*1.2 + n.ph)*0.5+0.5);
+      const [sx, sy] = bez(m, cx, cy, n, sh);
+      const gg = ctx.createRadialGradient(sx,sy,0, sx,sy, 26);
+      gg.addColorStop(0, hex(base, .5+e.flow*.4)); gg.addColorStop(1, hex(base,0));
+      ctx.save(); ctx.beginPath(); ctx.moveTo(m.x,m.y); ctx.quadraticCurveTo(cx,cy,ex,ey);
+      ctx.lineWidth = 2.5; ctx.strokeStyle = gg; ctx.stroke(); ctx.restore();
+      e.flow = Math.max(0, e.flow - dt*0.85);
     });
+    ctx.globalCompositeOperation = 'source-over';
 
-    // particles — eased, with fading trails and endpoint fade-in/out
+    // ── particles flowing ALONG the curve (additive glow) ──
+    ctx.globalCompositeOperation = 'lighter';
     for (let i=particles.length-1;i>=0;i--) {
       const pr = particles[i];
       if (pr.delay>0) { pr.delay-=dt; continue; }
-      if (pr.free) {  // celebration burst: free-flying, gravity-free, fades out
-        pr.x+=pr.vx*dt; pr.y+=pr.vy*dt; pr.vx*=0.96; pr.vy*=0.96; pr.life-=dt*0.9;
+      if (pr.free) {  // celebration burst: free-flying, fades out
+        pr.x+=pr.vx*dt; pr.y+=pr.vy*dt; pr.vx*=0.95; pr.vy*=0.95; pr.life-=dt*0.85;
         if (pr.life<=0){ particles.splice(i,1); continue; }
-        ctx.beginPath(); ctx.arc(pr.x,pr.y, 2.2*pr.life+0.5,0,7);
-        ctx.fillStyle=hex(pr.col,pr.life); ctx.shadowColor=pr.col; ctx.shadowBlur=10*pr.life;
-        ctx.fill(); ctx.shadowBlur=0; continue;
+        bloomDot(pr.x,pr.y, 3*pr.life+0.6, pr.col, pr.life);
+        continue;
       }
       const n = node(pr.id); if(!n){ particles.splice(i,1); continue; }
       pr.p += pr.speed*pr.dir*dt;
       if (pr.p<=0 || pr.p>=1) { particles.splice(i,1); continue; }
-      const dx=n.x-m.x, dy=n.y-m.y, len=Math.hypot(dx,dy)||1;
-      const nx=-dy/len, ny=dx/len, spread = pr.lane * Math.min(28, len*0.12);
-      const e = easeInOut(pr.p);
-      const x = m.x+dx*e + nx*spread, y = m.y+dy*e + ny*spread;
-      pr.trail.push([x,y]); if (pr.trail.length>6) pr.trail.shift();
+      const e2 = easeInOut(pr.p);
+      const [x,y] = bez(m, n._cx, n._cy, n, e2);
       const fade = Math.sin(pr.p*Math.PI);
-      // trail
+      pr.trail.push([x,y]); if (pr.trail.length>7) pr.trail.shift();
       for (let k=0;k<pr.trail.length;k++){
-        const a=(k/pr.trail.length)*0.5*fade;
-        ctx.beginPath(); ctx.arc(pr.trail[k][0],pr.trail[k][1], 1.6*fade+0.3,0,7);
-        ctx.fillStyle = hex(pr.col,a); ctx.fill();
+        const a=(k/pr.trail.length)*0.45*fade;
+        bloomDot(pr.trail[k][0],pr.trail[k][1], 1.6*fade+0.3, pr.col, a*2);
       }
-      // head
-      ctx.beginPath(); ctx.arc(x,y, 2.4*fade+0.7, 0, 7);
-      ctx.fillStyle = hex(pr.col, .9*fade); ctx.shadowColor=pr.col; ctx.shadowBlur=10*fade;
-      ctx.fill(); ctx.shadowBlur=0;
+      bloomDot(x,y, 2.6*fade+0.7, pr.col, fade);
     }
+    ctx.globalCompositeOperation = 'source-over';
 
-    // nodes
+    // ── nodes: multi-layer additive bloom orb (soft halo + core) + Fresnel rim ──
     nodes.forEach(n => {
       const col = COLOR[n.id] || '#7788cc';
       const isHub = n.id==='maestro';
-      const breathe = 1 + Math.sin(T*1.6 + n.ph*1.3)*0.035;
-      const r = n.r*breathe*(0.6+0.4*easeInOut(intro));
-      // activity halo
-      if (n.glow>0.02) {
-        ctx.beginPath(); ctx.arc(n.x,n.y, r + 10 + n.pulse*16, 0, 7);
-        ctx.fillStyle = hex(col, 0.12*n.glow); ctx.fill();
-      }
-      // body — radial gradient orb
-      const g = ctx.createRadialGradient(n.x-r*0.3, n.y-r*0.3, r*0.1, n.x, n.y, r);
-      g.addColorStop(0, hex(col, 0.55 + n.glow*0.4));
-      g.addColorStop(0.6, hex(col, 0.18 + n.glow*0.2));
-      g.addColorStop(1, hex(col, 0.06));
+      const breathe = 1 + fbm(n.ph, T*0.8)*0.05;
+      const r = n.r*breathe*(0.55+0.45*ease);
+      const lum = 0.5 + n.glow*0.5;
+
+      // additive bloom: wide soft halo, then tighter, then bright core
+      ctx.globalCompositeOperation = 'lighter';
+      bloomDisc(n.x,n.y, r*(2.6+n.pulse*1.2), col, (0.05+n.glow*0.10));   // wide halo
+      bloomDisc(n.x,n.y, r*1.5, col, 0.10+n.glow*0.14);                    // mid
+      ctx.globalCompositeOperation = 'source-over';
+
+      // body — Fresnel orb: dark centre, bright rim (holographic shell look)
+      const g = ctx.createRadialGradient(n.x,n.y, r*0.15, n.x,n.y, r);
+      g.addColorStop(0, hex(col, 0.10 + n.glow*0.18));
+      g.addColorStop(0.72, hex(col, 0.16 + n.glow*0.2));
+      g.addColorStop(0.92, hex(col, 0.6*lum));
+      g.addColorStop(1, hex(col, 0.0));
       ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, 7); ctx.fillStyle = g; ctx.fill();
-      // rim
-      ctx.lineWidth = (isHub?2.5:2) + n.glow*2;
-      ctx.strokeStyle = hex(col, 0.55 + n.glow*0.45);
-      ctx.shadowColor = col; ctx.shadowBlur = (isHub?16:9) + n.glow*26; ctx.stroke(); ctx.shadowBlur=0;
-      if (isHub) { // hub: a slow counter-rotating dashed ring — the conductor's baton
-        ctx.beginPath(); ctx.arc(n.x,n.y, r*1.18, 0, 7);
-        ctx.strokeStyle = hex(col, 0.18); ctx.lineWidth=1; ctx.stroke();
-        ctx.save(); ctx.translate(n.x,n.y); ctx.rotate(T*0.35);
-        ctx.beginPath(); ctx.arc(0,0, r*1.34, 0, 7);
-        ctx.setLineDash([2, 10]); ctx.strokeStyle = hex(col, 0.3+n.glow*0.3);
-        ctx.lineWidth=1.5; ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+      // crisp rim
+      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, 7);
+      ctx.lineWidth = (isHub?2:1.5) + n.glow*2; ctx.strokeStyle = hex(col, 0.7*lum);
+      ctx.globalCompositeOperation = 'lighter'; ctx.stroke(); ctx.globalCompositeOperation='source-over';
+
+      if (isHub) { // hub: twin counter-rotating dashed rings — a conductor's halo
+        for (const [rad,dir,dash,al] of [[1.22,1,[2,12],0.28],[1.42,-1,[2,20],0.18]]) {
+          ctx.save(); ctx.translate(n.x,n.y); ctx.rotate(T*0.3*dir);
+          ctx.beginPath(); ctx.arc(0,0, r*rad, 0, 7);
+          ctx.setLineDash(dash); ctx.strokeStyle = hex(col, al+n.glow*0.3);
+          ctx.lineWidth=1.4; ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+        }
       }
-      // glyph in core
-      ctx.fillStyle = hex('#ffffff', 0.92);
-      ctx.font = `${Math.round(r*0.62)}px ${FONT_UI}`;
+      // glyph
+      ctx.fillStyle = hex('#ffffff', 0.95);
+      ctx.font = `${Math.round(r*0.6)}px ${FONT_UI}`;
       ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.fillText(GLYPH[n.id]||'●', n.x, n.y+1);
-      // label — radially OUTWARD with dark halo
-      const lx = isHub ? n.x : n.x + Math.cos(n.ang)*(r+15);
-      const ly = isHub ? n.y + r + 16 : n.y + Math.sin(n.ang)*(r+15);
+      // label radially outward, dark halo
+      const lx = isHub ? n.x : n.x + Math.cos(n.ang)*(r+16);
+      const ly = isHub ? n.y + r + 18 : n.y + Math.sin(n.ang)*(r+16);
       ctx.font = (isHub?`600 15px ${FONT_UI}`:`500 12.5px ${FONT_UI}`);
       ctx.textBaseline = isHub ? 'top' : 'middle';
       ctx.textAlign = isHub ? 'center' : (Math.cos(n.ang)<-0.3?'right':(Math.cos(n.ang)>0.3?'left':'center'));
-      ctx.lineWidth=3; ctx.strokeStyle='rgba(6,8,15,.9)'; ctx.strokeText(n.label, lx, ly);
-      ctx.fillStyle = hex('#eaf0ff', .94); ctx.fillText(n.label, lx, ly);
+      ctx.lineWidth=3.5; ctx.strokeStyle='rgba(6,8,15,.92)'; ctx.strokeText(n.label, lx, ly);
+      ctx.fillStyle = hex('#eaf0ff', .95); ctx.fillText(n.label, lx, ly);
       n.glow = Math.max(0, n.glow - dt*1.0); n.pulse = Math.max(0, n.pulse - dt*1.6);
     });
 
     requestAnimationFrame(draw);
   }
+  const easeOutCubic = t => 1-Math.pow(1-t,3);
   function hex(c,a){ const n=parseInt(c.slice(1),16); return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; }
+  // a soft radial "bloom" disc (assumes caller set globalCompositeOperation)
+  function bloomDisc(x,y,r,col,a){
+    const g=ctx.createRadialGradient(x,y,0,x,y,r);
+    g.addColorStop(0,hex(col,a)); g.addColorStop(1,hex(col,0));
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();
+  }
+  function bloomDot(x,y,r,col,a){
+    bloomDisc(x,y,r*3,col,a*0.5);   // soft halo
+    ctx.fillStyle=hex(col,Math.min(1,a)); ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();  // core
+  }
 
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt=setTimeout(resize, 120); });
   return { setAgents, fire, start(){ resize(); requestAnimationFrame(draw); }, resize };
