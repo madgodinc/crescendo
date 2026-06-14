@@ -487,7 +487,7 @@ class Maestro:
                 os.remove(SITE_PATH)
             except OSError:
                 pass
-            code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). Reply with a one-line summary."
+            code_task = f"Implement this brief: {brief}\nUse the write_page tool (title/body/css/js). All page content must be in ENGLISH. Reply with a one-line summary."
             verdict = ""
             last_review = ""
             for rnd in range(1, MAX_REVIEW_ROUNDS + 1):
@@ -499,7 +499,8 @@ class Maestro:
                 review = await self.ask_with_skills("tuningfork",
                     f"The Soloist finished work for the brief: {brief}\n"
                     f"Read the workspace files yourself and review. "
-                    f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes.", skill_query=brief)
+                    f"Reply 'CLEAN' if good, or 'ISSUES: ...' with concrete fixes. "
+                    f"Write your entire review in ENGLISH.", skill_query=brief)
                 result[f"review_{rnd}"] = review
                 last_review = review
                 clean = self._is_clean(review)

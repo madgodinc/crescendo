@@ -248,6 +248,7 @@ const GLYPH = { maestro:'◆', conductor:'▲', soloist:'♪', tuningfork:'◈',
 const FONT_UI = "'Space Grotesk',system-ui,sans-serif";
 
 // ── canvas graph engine ─────────────────────────────────────────────────────
+const TAU = Math.PI*2;
 const Graph = (() => {
   const cvs = el('graph'), ctx = cvs.getContext('2d');
   let W=0, H=0, DPR=1, nodes=[], edges={}, particles=[], motes=[], shock=[], last=0, intro=0;
@@ -269,15 +270,19 @@ const Graph = (() => {
     layout();
   }
   function layout() {
-    const cx=W/2, cy=H/2, R=Math.min(W, H-70)*0.34;   // reserve bottom for the rail
+    // nudge the hub slightly up-left of centre so the composition isn't a dead-
+    // symmetric bullseye — gives it a focal point and breathing negative space.
+    const cx=W*0.48, cy=H*0.46, R=Math.min(W, H-70)*0.35;
     const spokes = nodes.filter(m=>m.id!=='maestro');
     nodes.forEach(n => {
-      if (n.id==='maestro') { n.x=cx; n.y=cy; n.r=Math.max(40, R*0.30); }
+      if (n.id==='maestro') { n.x=cx; n.y=cy; n.r=Math.max(46, R*0.34); }   // clearly the hero
       else {
         const k = spokes.indexOf(n), cnt = spokes.length || 1;
         const a = -Math.PI/2 + k*(2*Math.PI/cnt);
-        n.ang = a; n.x = cx + Math.cos(a)*R; n.y = cy + Math.sin(a)*R;
-        n.r = Math.max(26, R*0.20);
+        // slight per-node radius + distance jitter (golden-ratio phased) to break symmetry
+        const jit = 0.88 + 0.24*((k*0.618) % 1);
+        n.ang = a; n.x = cx + Math.cos(a)*R*jit; n.y = cy + Math.sin(a)*R*jit;
+        n.r = Math.max(24, R*0.185*jit);
       }
     });
   }
@@ -329,6 +334,7 @@ const Graph = (() => {
     }
   }
   const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+  const easeOutCubic = t => 1-Math.pow(1-t,3);
   // fractional Brownian motion — layered sines for organic, non-mechanical drift
   const fbm = (x, t) => Math.sin(x+t)*0.5 + Math.sin(x*2.1+t*1.7)*0.25 + Math.sin(x*4.3+t*0.6)*0.125;
   // a curved channel from hub m to node n: control point offset perpendicular so
@@ -368,7 +374,10 @@ const Graph = (() => {
 
     // store each node's curved-channel control point for this frame (particles reuse it)
     nodes.forEach(n => { if(n.id!=='maestro'){
-      const bend = Math.sin(T*0.4 + n.ph)*14;                       // gently breathing arc
+      // constant baseline bend (alternating handedness) so channels ALWAYS curve
+      // like an orchestral fan — never flatten back to a straight 8-bit line
+      const side = (n.ph % 2) ? 1 : -1;
+      const bend = side * (26 + Math.sin(T*0.4 + n.ph)*8);
       [n._cx, n._cy] = ctrl(m, n, bend);
     }});
 
@@ -377,7 +386,8 @@ const Graph = (() => {
     for (let i=shock.length-1;i>=0;i--){
       const s=shock[i]; s.t+=dt; const k=s.t/s.dur;
       if (k>=1){ shock.splice(i,1); continue; }
-      ctx.beginPath(); ctx.arc(s.x,s.y, easeOutCubic(k)*s.t*s.speed*(1/s.dur), 0, 7);
+      // ease-out: expand fast, then settle (a real shockwave) — radius = ease(k)*max
+      ctx.beginPath(); ctx.arc(s.x,s.y, easeOutCubic(k)*s.speed*s.dur, 0, TAU);
       ctx.strokeStyle = hex(s.col, (1-k)*0.55); ctx.lineWidth = 4*(1-k); ctx.stroke();
     }
     ctx.globalCompositeOperation = 'source-over';
@@ -440,23 +450,33 @@ const Graph = (() => {
       const r = n.r*breathe*(0.55+0.45*ease);
       const lum = 0.5 + n.glow*0.5;
 
-      // additive bloom: wide soft halo, then tighter, then bright core
+      // additive bloom: wide soft halo (kept low so 5 hub channels don't blow out)
       ctx.globalCompositeOperation = 'lighter';
-      bloomDisc(n.x,n.y, r*(2.6+n.pulse*1.2), col, (0.05+n.glow*0.10));   // wide halo
-      bloomDisc(n.x,n.y, r*1.5, col, 0.10+n.glow*0.14);                    // mid
+      bloomDisc(n.x,n.y, r*(2.4+n.pulse*1.1), col, (0.04+n.glow*0.09));
       ctx.globalCompositeOperation = 'source-over';
 
-      // body — Fresnel orb: dark centre, bright rim (holographic shell look)
-      const g = ctx.createRadialGradient(n.x,n.y, r*0.15, n.x,n.y, r);
-      g.addColorStop(0, hex(col, 0.10 + n.glow*0.18));
-      g.addColorStop(0.72, hex(col, 0.16 + n.glow*0.2));
-      g.addColorStop(0.92, hex(col, 0.6*lum));
+      // dark base disc — gives the orb a solid body and punches a void under the
+      // additive glow so the rim reads as a lit shell, not a fuzzy gumdrop.
+      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU);
+      ctx.fillStyle = 'rgba(8,11,20,0.82)'; ctx.fill();
+
+      // Fresnel shell: near-empty interior, a tight bright rim at the edge
+      const g = ctx.createRadialGradient(n.x,n.y, r*0.2, n.x,n.y, r);
+      g.addColorStop(0, hex(col, 0.04 + n.glow*0.10));
+      g.addColorStop(0.6, hex(col, 0.06 + n.glow*0.12));
+      g.addColorStop(0.9, hex(col, 0.35*lum));
+      g.addColorStop(0.97, hex(col, 0.9*lum));
       g.addColorStop(1, hex(col, 0.0));
-      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, 7); ctx.fillStyle = g; ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU); ctx.fillStyle = g; ctx.fill();
+      // off-center specular highlight — the glassy hot-spot that makes it a sphere
+      const hl = ctx.createRadialGradient(n.x-r*0.32, n.y-r*0.34, 0, n.x-r*0.32, n.y-r*0.34, r*0.6);
+      hl.addColorStop(0, `rgba(255,255,255,${0.22+n.glow*0.2})`); hl.addColorStop(1,'rgba(255,255,255,0)');
+      ctx.fillStyle = hl; ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
       // crisp rim
-      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, 7);
-      ctx.lineWidth = (isHub?2:1.5) + n.glow*2; ctx.strokeStyle = hex(col, 0.7*lum);
-      ctx.globalCompositeOperation = 'lighter'; ctx.stroke(); ctx.globalCompositeOperation='source-over';
+      ctx.beginPath(); ctx.arc(n.x,n.y, r, 0, TAU);
+      ctx.lineWidth = (isHub?2:1.5) + n.glow*2; ctx.strokeStyle = hex(col, 0.75*lum); ctx.stroke();
 
       if (isHub) { // hub: twin counter-rotating dashed rings — a conductor's halo
         for (const [rad,dir,dash,al] of [[1.22,1,[2,12],0.28],[1.42,-1,[2,20],0.18]]) {
@@ -484,7 +504,6 @@ const Graph = (() => {
 
     requestAnimationFrame(draw);
   }
-  const easeOutCubic = t => 1-Math.pow(1-t,3);
   function hex(c,a){ const n=parseInt(c.slice(1),16); return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; }
   // a soft radial "bloom" disc (assumes caller set globalCompositeOperation)
   function bloomDisc(x,y,r,col,a){
