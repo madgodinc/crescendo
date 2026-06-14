@@ -152,6 +152,8 @@ class Maestro:
             "phase": phase,
             "started": self._started,
             "updated": datetime.now(timezone.utc).isoformat(),
+            "review_verdict": self._result.get("review_verdict", ""),
+            "deploy": self._result.get("deploy", ""),
             "agents": AGENTS,
             "timeline": self.events,
         }

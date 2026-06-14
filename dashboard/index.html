@@ -147,6 +147,8 @@
               background:rgba(79,224,168,.08); white-space:nowrap; transition:.15s; }
   .auditbtn:hover { background:rgba(79,224,168,.16); box-shadow:0 0 14px rgba(79,224,168,.25); }
   .auditbtn.off { opacity:.35; pointer-events:none; }
+  .auditbtn.flyw { color:var(--purple); border-color:rgba(184,155,255,.45); background:rgba(184,155,255,.08); }
+  .auditbtn.flyw:hover { background:rgba(184,155,255,.16); box-shadow:0 0 14px rgba(184,155,255,.25); }
 
   /* right column: decision trail + runs */
   .side { border-left:1px solid var(--line); background:linear-gradient(180deg, rgba(10,14,26,.5), rgba(6,8,15,.5));
@@ -210,6 +212,7 @@
     <div class="logo">Cre<span class="c">scendo</span><span class="sub">orchestra of AI agents</span></div>
     <div class="brief" id="brief"></div>
     <div class="tokchip" id="tokTotal" style="opacity:0"></div>
+    <a class="auditbtn flyw" id="flywBtn" href="/flywheel" title="The flywheel: fixes learned across runs + reliability stats">↻ Flywheel</a>
     <a class="auditbtn" id="auditBtn" href="#" title="Open the tamper-evident audit report for this run">⛓ Audit report</a>
     <div class="pill idle" id="status"><span class="led"></span><span id="statusText">idle</span></div>
   </header>
@@ -827,8 +830,9 @@ async function boot() {
     if (!data) { el('feed').innerHTML='<div class="ev"><div class="txt">No data — run serve.py (live) or maestro.py.</div></div>'; return; }
     loadDoc({ ...data, status:'done', phase:'done' });
     setStatus('offline');
-    // offline vitrine: point the audit button at the pre-rendered static report
+    // offline vitrine: point the audit + flywheel buttons at pre-rendered static pages
     const ab = el('auditBtn'); if (ab) { ab.href = 'audit.html'; ab.classList.remove('off'); }
+    const fb = el('flywBtn'); if (fb) fb.href = 'flywheel.html';
   }
   el('step').onclick = () => step(true);
   el('play').onclick = async () => {

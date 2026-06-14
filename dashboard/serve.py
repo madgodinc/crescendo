@@ -41,15 +41,92 @@ _MIME = {".html": "text/html", ".js": "application/javascript",
          ".css": "text/css", ".json": "application/json", ".ico": "image/x-icon"}
 
 
+def _post(path: str, payload: dict, timeout=6):
+    """POST JSON to a mgi-mind endpoint with the server-side token; return parsed."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{MGIMIND_URL}{path}", data=body, method="POST",
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
 def _kv_get(key: str):
     """Fetch a KV value from mgi-mind, or None. Token added here, server-side."""
-    body = json.dumps({"key": key}).encode("utf-8")
-    req = urllib.request.Request(
-        f"{MGIMIND_URL}/kv/get", data=body, method="POST",
-        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=5) as r:
-        data = json.loads(r.read().decode("utf-8"))
+    data = _post("/kv/get", {"key": key})
     return data.get("value") if data.get("found") else None
+
+
+def learned_fixes():
+    """Parse the procedural playbooks the self-learning LOOP wrote (only those —
+    the procedure store also holds unrelated dev notes, so keep just the ones
+    whose source is the deploy gate)."""
+    try:
+        data = _post("/procedure/recall", {"error": "deploy gate refused", "limit": 12})
+    except Exception:
+        return []
+    text = data.get("result", "") if isinstance(data, dict) else ""
+    out, cur = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and "id:" in line:
+            if cur:
+                out.append(cur)
+            cur = {"verified": "verified" in line.lower(), "error": "", "fix": "",
+                   "when": "", "src": ""}
+        elif cur is not None:
+            if line.startswith("error:"):
+                cur["error"] = line[6:].strip()
+            elif line.startswith("fix:"):
+                cur["fix"] = line[4:].strip()
+            elif line.startswith("when:"):
+                cur["when"] = line[5:].strip()
+            elif line.startswith("from:"):
+                cur["src"] = line[5:].strip()
+    if cur:
+        out.append(cur)
+    # only the self-learning loop's deploy-gate playbooks (dedupe by fix text)
+    seen, fixes = set(), []
+    for p in out:
+        if "deploy gate" not in p.get("src", "") and "deploy gate refused" not in p.get("error", ""):
+            continue
+        key = p["fix"][:50]
+        if key in seen:
+            continue
+        seen.add(key)
+        fixes.append(p)
+    return fixes
+
+
+def run_stats(active: dict):
+    """Aggregate cross-run metrics from the history mgi-mind keeps."""
+    recent = (active or {}).get("recent", [])
+    runs = []
+    for r in recent:
+        doc = _kv_get(f"{LIVE_MARKER}:{r.get('run_id')}")
+        if not isinstance(doc, dict):
+            continue
+        tl = doc.get("timeline", [])
+        tok = sum((e.get("meta") or {}).get("tokens", 0) for e in tl)
+        verdict = doc.get("review_verdict", "")
+        clean = verdict == "clean"
+        # wall-clock from first to last event
+        ts = [e.get("ts", "") for e in tl if e.get("ts")]
+        dur = 0
+        if len(ts) >= 2:
+            from datetime import datetime
+            try:
+                dur = (datetime.fromisoformat(ts[-1]) - datetime.fromisoformat(ts[0])).total_seconds()
+            except Exception:
+                dur = 0
+        runs.append({"run_id": r.get("run_id"), "brief": r.get("brief", ""),
+                     "status": r.get("status"), "clean": clean, "tokens": tok, "dur": round(dur)})
+    n = len(runs)
+    cleans = sum(1 for r in runs if r["clean"])
+    return {"n": n, "clean_pct": round(100 * cleans / n) if n else 0,
+            "avg_tokens": round(sum(r["tokens"] for r in runs) / n) if n else 0,
+            "avg_dur": round(sum(r["dur"] for r in runs) / n) if n else 0,
+            "runs": runs}
 
 
 ROLE = {"human": "Human", "conductor": "Conductor", "soloist": "Soloist",
@@ -180,6 +257,76 @@ def render_audit(doc: dict) -> str:
 </div></body></html>"""
 
 
+def render_flywheel(active: dict) -> str:
+    """The flywheel made visible: the fixes the orchestra has LEARNED across runs
+    (so it stops rediscovering them) + cross-run reliability metrics. This is the
+    on-screen proof of 'cheaper and more accurate the longer it runs'."""
+    e = html.escape
+    fixes = learned_fixes()
+    stats = run_stats(active)
+    fix_rows = "".join(f"""
+      <tr><td class="v">{'✓ verified' if f['verified'] else '· unverified'}</td>
+          <td class="err">{e(f['error'])}</td>
+          <td class="fix">{e(f['fix'])}</td></tr>""" for f in fixes) or \
+        '<tr><td colspan="3" class="empty">No fixes learned yet — they appear after the orchestra recovers from a deploy failure.</td></tr>'
+    run_rows = "".join(f"""
+      <tr><td>{e((r.get('brief') or r.get('run_id'))[:48])}</td>
+          <td class="{'ok' if r['clean'] else 'warn'}">{'clean' if r['clean'] else (r.get('status') or '—')}</td>
+          <td class="num">~{r['tokens']}</td><td class="num">{r['dur']}s</td></tr>""" for r in stats["runs"]) or \
+        '<tr><td colspan="4" class="empty">No completed runs yet.</td></tr>'
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Flywheel · Crescendo</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {{ --bg:#0a0e1a; --pan:#121829; --line:rgba(120,140,200,.16); --ink:#e8eef9; --dim:#7e8aa8;
+    --gold:#ffcf5a; --green:#4fe0a8; --pink:#ff7bc6; --purple:#b89bff; }}
+  *{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 'Space Grotesk',system-ui,sans-serif}}
+  .wrap{{max-width:1000px;margin:0 auto;padding:36px 26px 60px}}
+  a.back{{color:#5aa8ff;text-decoration:none;font-size:13px}}
+  h1{{font-size:23px;margin:6px 0 4px}} h1 .a{{color:var(--gold)}}
+  .sub{{color:var(--dim);font-size:13px;max-width:640px}}
+  .stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:22px 0}}
+  .stat{{background:var(--pan);border:1px solid var(--line);border-radius:14px;padding:16px 18px}}
+  .stat .num{{font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace}}
+  .stat .lbl{{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-top:3px}}
+  .stat.g .num{{color:var(--green)}} .stat.p .num{{color:var(--purple)}} .stat.gold .num{{color:var(--gold)}}
+  h2{{font-size:15px;margin:28px 0 8px}} h2 .c{{color:var(--purple)}}
+  .card{{background:var(--pan);border:1px solid var(--line);border-radius:14px;overflow:hidden}}
+  table{{width:100%;border-collapse:collapse}}
+  th{{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+      border-bottom:1px solid var(--line);padding:9px 14px}}
+  td{{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top;font-size:13px}}
+  td.v{{color:var(--green);white-space:nowrap;font-family:'JetBrains Mono',monospace;font-size:11.5px}}
+  td.err{{color:var(--pink);font-family:'JetBrains Mono',monospace;font-size:12px;white-space:nowrap}}
+  td.fix{{color:#cdd6ee}} td.num{{font-family:'JetBrains Mono',monospace;text-align:right;color:var(--dim)}}
+  td.ok{{color:var(--green)}} td.warn{{color:var(--pink)}} td.empty{{color:var(--dim);text-align:center;padding:22px}}
+  .note{{color:var(--dim);font-size:12px;margin-top:18px;line-height:1.7}}
+</style></head><body><div class="wrap">
+  <a class="back" href="/">← dashboard</a>
+  <h1>The flywheel · <span class="a">Crescendo</span></h1>
+  <div class="sub">Every time the orchestra recovers from a failure, it writes the fix to memory.
+     Next time that class of problem appears, it recalls the fix instead of rediscovering it —
+     so it gets cheaper and more accurate the longer it runs.</div>
+  <div class="stats">
+    <div class="stat gold"><div class="num">{stats['n']}</div><div class="lbl">Runs</div></div>
+    <div class="stat g"><div class="num">{stats['clean_pct']}%</div><div class="lbl">Shipped clean</div></div>
+    <div class="stat p"><div class="num">~{stats['avg_tokens']}</div><div class="lbl">Avg tokens / run</div></div>
+    <div class="stat"><div class="num">{stats['avg_dur']}s</div><div class="lbl">Avg wall-clock</div></div>
+    <div class="stat g"><div class="num">{len(fixes)}</div><div class="lbl">Fixes learned</div></div>
+  </div>
+  <h2>Learned <span class="c">fixes</span> · procedural memory</h2>
+  <div class="card"><table>
+    <thead><tr><th>Trust</th><th>Failure signature</th><th>Verified fix</th></tr></thead>
+    <tbody>{fix_rows}</tbody></table></div>
+  <h2>Run <span class="c">history</span></h2>
+  <div class="card"><table>
+    <thead><tr><th>Brief</th><th>Verdict</th><th>Tokens</th><th>Time</th></tr></thead>
+    <tbody>{run_rows}</tbody></table></div>
+  <div class="note">A verified fix carries a deterministic signal (the rebuilt page passed the deploy gate).
+    Watch this list grow across runs — that growth is the flywheel.</div>
+</div></body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, status=200):
         payload = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -221,6 +368,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/runs":
                 active = _kv_get(ACTIVE_KEY) or {"current": None, "recent": []}
                 return self._send_json(active)
+            if path == "/api/learned":
+                return self._send_json({"fixes": learned_fixes()})
+            if path == "/api/stats":
+                active = _kv_get(ACTIVE_KEY) or {}
+                return self._send_json(run_stats(active))
             if path == "/api/live":
                 active = _kv_get(ACTIVE_KEY) or {}
                 cur = active.get("current")
@@ -245,6 +397,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_response(302); self.send_header("Location", f"/audit/{cur}")
                     self.end_headers(); return
                 return self._send_html("<p>No runs yet.</p>")
+            if path == "/flywheel":
+                return self._send_html(render_flywheel(_kv_get(ACTIVE_KEY) or {}))
         except Exception as e:
             # mgi-mind unreachable / bad reply — tell the front-end, don't hang.
             return self._send_json({"error": f"memory unreachable: {e}"}, status=502)
