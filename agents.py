@@ -119,6 +119,12 @@ load_dotenv("/home/madgodinc/code/crescendo/.env")
 
 FEATHERLESS = (os.environ["FEATHERLESS_BASE_URL"], os.environ["FEATHERLESS_API_KEY"])
 AIMLAPI = (os.environ["AIMLAPI_BASE_URL"], os.environ["AIMLAPI_API_KEY"])
+# Optional top-tier provider for the comparison/turbo tier (LLM_TIER=turbo).
+# The sponsor APIs (Featherless / AIMLAPI) remain the default — this is only a
+# benchmark lever to measure the quality/speed delta vs a frontier model.
+_OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI = (os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), _OPENAI_KEY)
+LLM_TIER = os.environ.get("LLM_TIER", "sponsor").strip().lower()
 
 # Every role is told to use band_send_message to reply — the LangGraph adapter
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
@@ -144,6 +150,15 @@ GPT4O = (AIMLAPI, "gpt-4o")                              # reliable tool calls �
 DSCHAT = (AIMLAPI, "deepseek-chat")                      # conductor (plan text)
 FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # fallback only — Featherless plan caps Qwen-72B at 1 concurrent request (4 units), so it can't be a primary under any parallelism
 FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
+
+# Turbo tier: route every role to frontier OpenAI models for the comparison run.
+# Sponsor tier (default) is untouched — this only activates with LLM_TIER=turbo
+# AND a real OpenAI key, so a normal run always stays on the sponsor APIs.
+if LLM_TIER == "turbo" and _OPENAI_KEY:
+    GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI (no reseller hop)
+    DSCHAT = (OPENAI, "gpt-4o")         # plan text on the frontier model too
+    FB_QWEN72 = (OPENAI, "gpt-4o")      # keep the fallback on the same fast path
+    FB_DEEPSEEK = (OPENAI, "gpt-4o")
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
