@@ -128,8 +128,11 @@ OPENAI = (os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), _OPENA
 _GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI = (os.environ.get("GEMINI_BASE_URL",
           "https://generativelanguage.googleapis.com/v1beta/openai"), _GEMINI_KEY)
-# Default tier: frontier model if a key exists (sponsors ran out), else sponsor.
-LLM_TIER = os.environ.get("LLM_TIER", "openai" if _OPENAI_KEY or _GEMINI_KEY else "sponsor").strip().lower()
+# Default tier: Gemini if its key is set (the $300-credit frontier path), else
+# OpenAI, else the sponsor reseller path. Override with LLM_TIER=sponsor|openai.
+LLM_TIER = os.environ.get(
+    "LLM_TIER",
+    "gemini" if _GEMINI_KEY else ("openai" if _OPENAI_KEY else "sponsor")).strip().lower()
 
 # Every role is told to use band_send_message to reply — the LangGraph adapter
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
@@ -163,14 +166,15 @@ FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
 # is set) or "gemini". A reseller/sponsor-only run is still possible with
 # LLM_TIER=sponsor.
 if LLM_TIER == "gemini" and _GEMINI_KEY:
-    FRONTIER = (GEMINI, "gemini-2.0-flash")
-    GPT4O = DSCHAT = FB_QWEN72 = FB_DEEPSEEK = FRONTIER
-elif LLM_TIER != "sponsor" and _OPENAI_KEY:
-    FRONTIER = (OPENAI, "gpt-4o")       # direct OpenAI — fast, passes the gate
-    GPT4O = (OPENAI, "gpt-4o")
+    GEM = (GEMINI, "gemini-2.5-flash")  # fast, passes the gate (thinking off)
+    OAI = (OPENAI, "gpt-4o") if _OPENAI_KEY else (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")
+    GPT4O = DSCHAT = GEM
+    FB_QWEN72 = FB_DEEPSEEK = OAI       # OpenAI as the cross-provider fallback
+elif LLM_TIER == "openai" and _OPENAI_KEY:
+    GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI — fast, passes the gate
     DSCHAT = (OPENAI, "gpt-4o")
-    FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")   # sponsor as real fallback
-    FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")
+    GEM = (GEMINI, "gemini-2.5-flash") if _GEMINI_KEY else (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")
+    FB_QWEN72 = FB_DEEPSEEK = GEM       # the other frontier model as fallback
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
@@ -265,10 +269,15 @@ def _llm(spec, agent_name="agent", mind_token=""):
     delegated to .with_fallbacks() (the other provider) and maestro's ask() retry.
     Tracks token usage per agent for the dashboard."""
     (base_url, api_key), model = spec
+    extra = {}
+    # Gemini 2.5 'thinking' burns the whole token budget before it writes any
+    # output — turn it off so the model spends its budget on the actual answer.
+    if "gemini" in model.lower():
+        extra["model_kwargs"] = {"reasoning_effort": "none"}
     return TokenTrackingChatOpenAI(model=model, base_url=base_url, api_key=api_key,
                       temperature=0, max_tokens=8192, timeout=45, max_retries=0,
                       stream_usage=True,   # emit usage_metadata on the final stream chunk
-                      agent_name=agent_name, mind_token=mind_token)
+                      agent_name=agent_name, mind_token=mind_token, **extra)
 
 
 def build(prefix, primary, fallback, role) -> Agent:
