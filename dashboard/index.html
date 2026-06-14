@@ -312,9 +312,14 @@ const Graph = (() => {
     const cx=W*0.5, cy=H*0.47, R=Math.min(W, H-80)*0.38;
     const cnt = nodes.length || 1;
     nodes.forEach((n,k) => {
+      n.r = Math.max(26, R*0.165);
+      if (n.pinX != null) {            // user dragged this one — keep it (fraction of W/H)
+        n.x = n.pinX*W; n.y = n.pinY*H;
+        n.ang = Math.atan2(n.y-cy, n.x-cx);
+        return;
+      }
       const a = -Math.PI/2 + k*(TAU/cnt);
       n.ang = a; n.x = cx + Math.cos(a)*R; n.y = cy + Math.sin(a)*R;
-      n.r = Math.max(26, R*0.165);
     });
   }
   function setAgents(agents) {
@@ -556,6 +561,34 @@ const Graph = (() => {
   }
 
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt=setTimeout(resize, 120); });
+
+  // ── drag: move any agent anywhere; links/particles follow automatically ──
+  let drag = null, dragMoved = false;
+  const evPos = e => { const r = cvs.getBoundingClientRect();
+    return [ (e.clientX - r.left) * (W/r.width), (e.clientY - r.top) * (H/r.height) ]; };
+  const hit = (x,y) => { // topmost node under the point
+    for (let i=nodes.length-1;i>=0;i--){ const n=nodes[i];
+      if (Math.hypot(x-n.x, y-n.y) <= n.r*1.15) return n; }
+    return null;
+  };
+  cvs.addEventListener('mousedown', e => {
+    const [x,y] = evPos(e); const n = hit(x,y);
+    if (n) { drag = { n, dx:n.x-x, dy:n.y-y }; dragMoved=false; cvs.style.cursor='grabbing'; e.preventDefault(); }
+  });
+  window.addEventListener('mousemove', e => {
+    if (drag) { const [x,y] = evPos(e);
+      drag.n.x = x+drag.dx; drag.n.y = y+drag.dy; dragMoved=true;
+      drag.n.pinX = drag.n.x/W; drag.n.pinY = drag.n.y/H;   // remember (survives resize)
+      drag.n.glow = Math.max(drag.n.glow, .6);
+    } else { const [x,y] = evPos(e); cvs.style.cursor = hit(x,y) ? 'grab' : 'default'; }
+  });
+  window.addEventListener('mouseup', () => { if (drag){ drag=null; cvs.style.cursor='grab'; } });
+  // double-click an agent to release it back to the hexagon
+  cvs.addEventListener('dblclick', e => {
+    const [x,y] = evPos(e); const n = hit(x,y);
+    if (n) { n.pinX = n.pinY = null; layout(); }
+  });
+
   return { setAgents, fire, start(){ resize(); requestAnimationFrame(draw); }, resize };
 })();
 
