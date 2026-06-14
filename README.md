@@ -10,7 +10,7 @@ can be altered after the fact, and you can open it and verify the chain yourself
 Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of-agents-hackathon)
 (June 12–19, 2026).
 
-**Live dashboard:** https://crescendo-dashboard.pages.dev · **Example shipped page:** https://b83e8f9c.crescendo-demo-5vj.pages.dev
+**Live dashboard:** https://crescendo-dashboard.pages.dev · **Example shipped page:** https://crescendo-demo-5vj.pages.dev
 
 ## Prove every decision
 
