@@ -175,7 +175,7 @@ docker compose -f docker-compose.yml -f docker-compose.image.yml up
 ### 3. Drive the live orchestra (bring your own keys)
 
 The engine is here; the fuel is yours: five [Band](https://band.ai) agents, any
-OpenAI-compatible LLM key (Gemini, OpenAI, Featherless, or AI/ML API — set
+OpenAI-compatible LLM key (Gemini, OpenAI, Featherless, or AI/ML API via
 `LLM_TIER`), and a Cloudflare account for the deploy. Copy the template and fill
 it in:
 
