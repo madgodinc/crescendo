@@ -415,7 +415,10 @@ const Graph = (() => {
   function link(from, to, col) {
     const a = node(from), b = node(to);
     if (!a || !b || from===to) return;
-    links.push({ from, to, col, t:0, life:1 });
+    // a new hand-off begins: release every previously active link so it fades,
+    // and keep THIS one alive+pulsing until the next direction change.
+    for (const l of links) l.active = false;
+    links.push({ from, to, col, t:0, life:1, active:true });
     spawn(from, to, col);
   }
 
@@ -460,6 +463,14 @@ const Graph = (() => {
     for (let i=0;i<burst;i++) {
       particles.push({ from, to, col, p:0, speed:.5+Math.random()*.35,
                        lane:(Math.random()-.5), delay:i*0.05, trail:[] });
+    }
+  }
+  // one repeating wave down an active link — a tight pulse of dots so the thread
+  // reads as a continuous, looping flow for as long as the hand-off is active.
+  function emitWave(from, to, col) {
+    for (let i=0;i<5;i++) {
+      particles.push({ from, to, col, p:0, speed:.62+Math.random()*.12,
+                       lane:(Math.random()-.5)*0.5, delay:i*0.045, trail:[] });
     }
   }
   const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
@@ -522,7 +533,18 @@ const Graph = (() => {
     // ── transient connections: a curved glowing arc only WHILE two agents talk ──
     ctx.globalCompositeOperation = 'lighter';
     for (let i=links.length-1;i>=0;i--){
-      const lk = links[i]; lk.t += dt; lk.life = Math.max(0, 1 - lk.t/2.0);   // ~2s life
+      const lk = links[i]; lk.t += dt;
+      if (lk.active) {
+        // active hand-off: hold the line lit and pulse it while the agent works,
+        // so the connection stays visible for the whole transfer, not ~2s.
+        lk.life = 0.78 + 0.22*Math.sin(lk.t*3.4);
+        // keep emitting waves of particles down the line, on a metronome, so the
+        // thread looks like a continuous flow from one agent to the next.
+        lk.emit = (lk.emit||0) - dt;
+        if (lk.emit <= 0) { emitWave(lk.from, lk.to, lk.col); lk.emit = 0.5; }
+      } else {
+        lk.life = Math.max(0, lk.life - dt/1.2);   // released: fade out
+      }
       if (lk.life<=0){ links.splice(i,1); continue; }
       const a=node(lk.from), b=node(lk.to); if(!a||!b){ links.splice(i,1); continue; }
       const [cx,cy] = linkCtrl(a,b);
