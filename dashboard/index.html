@@ -131,7 +131,7 @@
   .rail .ph .phm { grid-column:2; display:flex; gap:7px; font-size:10px; font-weight:500;
                    font-family:var(--mono); min-height:12px; }
   .rail .ph .phm .t { color:var(--ink); opacity:.85; }
-  .rail .ph .phm .k { color:var(--archivist); }
+  .rail .ph .phm .k { color:var(--archivist); margin-left:8px; }
   .rail .ph.active { color:var(--ink); }
   .rail .ph.active .ring { border-color:var(--maestro); box-shadow:0 0 12px var(--maestro);
                            animation:pulse 1.2s ease-in-out infinite; }
@@ -653,12 +653,12 @@ function renderRail(phase, status) {
     d.className = 'ph ' + st;
     const s = stat[p], m = d.querySelector('.phm');
     if (m) m.innerHTML = (s && s.dur != null)
-      ? `<span class="t">${fmtDur(s.dur)}</span>` + (s.tokens ? `<span class="k">${fmtTok(s.tokens)} tok</span>` : '')
+      ? `<span class="t">${fmtDur(s.dur)}</span>` + (s.tokens ? `<span class="k">~${fmtTok(s.tokens)} tok</span>` : '')
       : '';
   });
   // header total-tokens chip
   const tt = el('tokTotal');
-  if (tt) { tt.textContent = total ? `${fmtTok(total)} tokens` : ''; tt.style.opacity = total?1:0; }
+  if (tt) { tt.textContent = total ? `~${fmtTok(total)} tokens` : ''; tt.style.opacity = total?1:0; }
 }
 
 // ── decision trail ──────────────────────────────────────────────────────────

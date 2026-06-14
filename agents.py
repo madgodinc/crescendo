@@ -103,32 +103,35 @@ REPLY_RULE = (
 # the one that reliably emits tool calls, so every tool-using role runs on it.
 # DeepSeek-V3.1 is fine for the Conductor (plan text, no tools). AIMLAPI is the
 # cross-provider fallback (it was down — Cloudflare 522 — on 2026-06-14).
-QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")     # reliable tool calls — all tool roles
-DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")   # strong reasoning, text-only roles
-FB_DEEPSEEK = (AIMLAPI, "deepseek-chat")                 # fallback
-FB_GPT4O = (AIMLAPI, "gpt-4o")                            # fallback (reliable tool calls)
+# 2026-06-14 PM: Featherless began rate-limiting hard (429 storms stalling runs);
+# AIMLAPI recovered. Flip primary->AIMLAPI (gpt-4o is a reliable tool-caller),
+# Featherless->fallback. Both providers are wired so whichever is healthy wins.
+GPT4O = (AIMLAPI, "gpt-4o")                              # reliable tool calls — tool roles
+DSCHAT = (AIMLAPI, "deepseek-chat")                      # conductor (plan text)
+FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")  # fallback (reliable tool calls)
+FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1") # fallback
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
-    "Conductor": ("CONDUCTOR", DEEPSEEK, FB_DEEPSEEK,
+    "Conductor": ("CONDUCTOR", DSCHAT, FB_DEEPSEEK,
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
-    "Soloist": ("SOLOIST", QWEN72, FB_GPT4O,
+    "Soloist": ("SOLOIST", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Soloist — the engineer. You MUST actually CALL the write_page "
         "tool (do not just describe it): pass title, body (markup INSIDE <body> only — NO "
         "<html>/<head>/<body>/<script>/<style> tags), css (rules only), js (code only). The HTML "
         "shell is fixed for you. Build EXACTLY what the brief asks for, in English. Do NOT add a "
         "favicon or base64. Do NOT paste code in chat. After the tool returns, reply one line."),
-    "Tuning Fork": ("TUNING_FORK", QWEN72, FB_GPT4O,
+    "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Tuning Fork — the critic. CALL list_files then read_file to read "
         "the Soloist's code yourself — never expect it in chat. CHECK FIRST that the file is "
         "complete and not truncated (must end with </html>); if truncated or empty, that's an "
         "ISSUE. Then review correctness against the brief. Reply 'CLEAN' only if the file is whole "
         "and works, else 'ISSUES: ...' with concrete fixes. Write the review in English."),
-    "Stage Tech": ("STAGE_TECH", QWEN72, FB_GPT4O,
+    "Stage Tech": ("STAGE_TECH", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Stage Tech — the deployer. CALL deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
-    "Archivist": ("ARCHIVIST", QWEN72, FB_GPT4O,
+    "Archivist": ("ARCHIVIST", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Archivist — memory. CALL remember to store what you're told, "
         "recall to fetch context, and reply with a one-line confirmation or summary in English."),
 }
@@ -142,11 +145,8 @@ class TokenTrackingChatOpenAI(ChatOpenAI):
     agent_name: str = "agent"
     mind_token: str = ""
 
-    def _bump(self, result):
+    def _bump_usage(self, usage):
         try:
-            gens = getattr(result, "generations", None) or []
-            msg = gens[0].message if gens else None
-            usage = getattr(msg, "usage_metadata", None) if msg else None
             tot = int((usage or {}).get("total_tokens") or 0)
             if tot and self.mind_token:
                 _TOK_RUNNING[self.agent_name] = _TOK_RUNNING.get(self.agent_name, 0) + tot
@@ -155,6 +155,11 @@ class TokenTrackingChatOpenAI(ChatOpenAI):
                                                     _TOK_RUNNING[self.agent_name]))
         except Exception:
             pass
+
+    def _bump(self, result):
+        gens = getattr(result, "generations", None) or []
+        msg = gens[0].message if gens else None
+        self._bump_usage(getattr(msg, "usage_metadata", None) if msg else None)
 
     async def _agenerate(self, *a, **k):
         result = await super()._agenerate(*a, **k)
@@ -165,6 +170,21 @@ class TokenTrackingChatOpenAI(ChatOpenAI):
         result = super()._generate(*a, **k)
         self._bump(result)
         return result
+
+    # the LangGraph agent streams via _astream — usage rides the LAST chunk
+    async def _astream(self, *a, **k):
+        async for chunk in super()._astream(*a, **k):
+            u = getattr(getattr(chunk, "message", None), "usage_metadata", None)
+            if u:
+                self._bump_usage(u)
+            yield chunk
+
+    def _stream(self, *a, **k):
+        for chunk in super()._stream(*a, **k):
+            u = getattr(getattr(chunk, "message", None), "usage_metadata", None)
+            if u:
+                self._bump_usage(u)
+            yield chunk
 
 
 _TOK_RUNNING: dict[str, int] = {}   # per-agent running total this process
@@ -177,6 +197,7 @@ def _llm(spec, agent_name="agent", mind_token=""):
     (base_url, api_key), model = spec
     return TokenTrackingChatOpenAI(model=model, base_url=base_url, api_key=api_key,
                       temperature=0, max_tokens=8192, timeout=70, max_retries=0,
+                      stream_usage=True,   # emit usage_metadata on the final stream chunk
                       agent_name=agent_name, mind_token=mind_token)
 
 

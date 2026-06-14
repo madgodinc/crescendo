@@ -114,17 +114,22 @@ class Maestro:
         self._phase: str = "rider"   # current phase, for live pushes
         self._tok_base: dict[str, int] = {}   # per-agent token total at last read
 
-    async def _tok_delta(self, actor: str) -> int:
-        """Tokens this agent spent since the last time we asked — read from the
-        running total the agent publishes to mgi-mind. First read for an agent
-        is its delta-from-zero baseline (0)."""
+    async def _tok_delta(self, actor: str, reply: str = "") -> int:
+        """Tokens this agent spent on its latest turn. Prefer the REAL running
+        total the agent publishes to mgi-mind; if that isn't available (Band's
+        LLM routing can bypass our usage hook), fall back to an estimate from the
+        text the agent sent + skills it was fed (~4 chars/token, in+out)."""
         try:
             total = await get_token_total(ARCHIVIST_TOKEN, actor)
         except Exception:
-            return 0
+            total = 0
         prev = self._tok_base.get(actor)
         self._tok_base[actor] = total
-        return 0 if prev is None else max(0, total - prev)
+        real = 0 if prev is None else max(0, total - prev)
+        if real:
+            return real
+        # estimate: prompt+reply ≈ len/4; double for the input the agent read
+        return int(len(reply) / 4 * 2.2) if reply else 0
 
     def record(self, actor: str, kind: str, text: str, meta: dict | None = None) -> None:
         """Append one event to the replay trail (rendered by the dashboard)."""
@@ -490,7 +495,7 @@ class Maestro:
                 f"Brief from the human: {brief}\nProduce a short build plan (3-5 steps). "
                 f"Reply with the plan only.", skill_query=brief)
             result["plan"] = plan
-            self.record("conductor", "plan", _clean(plan), {"tokens": await self._tok_delta("conductor")})
+            self.record("conductor", "plan", _clean(plan), {"tokens": await self._tok_delta("conductor", plan)})
             self._done.add("plan")
             await self._save("plan")
             await self._push_live("running", "code-review")
@@ -513,7 +518,7 @@ class Maestro:
                 log("phase", f"code round {rnd}")
                 code_summary = await self.ask_soloist_write(code_task, brief)
                 self.record("soloist", "code", _clean(code_summary),
-                            {"round": rnd, "tokens": await self._tok_delta("soloist")})
+                            {"round": rnd, "tokens": await self._tok_delta("soloist", code_summary)})
                 await self._push_live("running", "code-review")
                 # Tuning Fork reads the files itself (list_files/read_file) — no code in chat.
                 review = await self.ask_with_skills("tuningfork",
@@ -526,7 +531,7 @@ class Maestro:
                 clean = self._is_clean(review)
                 self.record("tuningfork", "review", _clean(review),
                             {"round": rnd, "verdict": "clean" if clean else "issues",
-                             "tokens": await self._tok_delta("tuningfork")})
+                             "tokens": await self._tok_delta("tuningfork", review)})
                 await self._push_live("running", "code-review")
                 if clean:
                     verdict = "clean"
@@ -568,7 +573,7 @@ class Maestro:
             url = _clean(deploy)
             self.record("stagetech", "deploy", url,
                         {"url": next((w for w in url.split() if "pages.dev" in w), ""),
-                         "tokens": await self._tok_delta("stagetech")})
+                         "tokens": await self._tok_delta("stagetech", deploy)})
             self._done.add("deploy")
             await self._save("deploy")
             await self._push_live("running", "archive")
@@ -580,7 +585,7 @@ class Maestro:
                 f"Remember this run: brief={brief}; result={deploy}. Confirm in one line.")
             result["archive"] = archive
             self.record("archivist", "archive", _clean(archive),
-                        {"tokens": await self._tok_delta("archivist")})
+                        {"tokens": await self._tok_delta("archivist", archive)})
             self._done.add("archive")
 
         # run finished cleanly — mark the checkpoint done so a re-run starts fresh
