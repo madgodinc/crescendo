@@ -220,10 +220,16 @@
   .count { color:var(--dim); font-size:11.5px; margin-left:auto; font-variant-numeric:tabular-nums; }
 
   @media (max-width:1040px) {
-    .app { grid-template-columns:1fr; grid-template-rows:auto 56vh 1fr; }
-    .side { border-left:0; border-top:1px solid var(--line); }
+    .app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto 56vh 1fr; }
+    .stage { width:100%; min-width:0; height:56vh; }
+    .side { border-left:0; border-top:1px solid var(--line); min-width:0; }
     .now { max-width:92%; }
+    /* header wraps instead of pushing the page wider than the viewport */
+    header { grid-column:1 / 2; flex-wrap:wrap; row-gap:8px; }
+    .brief { order:3; flex-basis:100%; }
   }
+  /* never let anything force a horizontal scrollbar */
+  html, body { max-width:100%; overflow-x:hidden; }
 </style>
 </head>
 <body>
@@ -749,6 +755,9 @@ function step(animate) {
   div.className = 'ev ' + e.kind;
   div.style.setProperty('--actor', col);
   let txt = (e.text || '').replace(/</g,'&lt;');
+  // strip routing noise the models echo back: @[[uuid]] mentions and bare
+  // @handles (incl. the human's real handle) — the actor is already labelled.
+  txt = txt.replace(/@\[\[[^\]]+\]\]/g, '').replace(/@[\w.-]+/g, '').replace(/^\s+/, '');
   txt = txt.replace(/(https:\/\/[a-z0-9.-]+\.pages\.dev)/i, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   div.innerHTML =
     `<div class="top"><span class="glyph" style="color:${col}">${GLYPH[e.actor]||'●'}</span>`+
