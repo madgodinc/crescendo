@@ -31,13 +31,13 @@
   <div class="sub">Every time the orchestra recovers from a failure, it writes the fix to memory.
      Next time that class of problem appears, it recalls the fix instead of rediscovering it,
      so it gets cheaper and more accurate the longer it runs. The numbers below are operational
-     stats over the 3 recorded runs on this instance, not a
+     stats over the 4 recorded runs on this instance, not a
      benchmark — small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
   <div class="stats">
-    <div class="stat gold"><div class="num">3</div><div class="lbl">Runs</div></div>
-    <div class="stat g"><div class="num">33%</div><div class="lbl">Shipped clean</div></div>
-    <div class="stat p"><div class="num">~163775</div><div class="lbl">Avg tokens / run</div></div>
-    <div class="stat"><div class="num">91s</div><div class="lbl">Avg wall-clock</div></div>
+    <div class="stat gold"><div class="num">4</div><div class="lbl">Runs</div></div>
+    <div class="stat g"><div class="num">25%</div><div class="lbl">Shipped clean</div></div>
+    <div class="stat p"><div class="num">~289876</div><div class="lbl">Avg tokens / run</div></div>
+    <div class="stat"><div class="num">952s</div><div class="lbl">Avg wall-clock</div></div>
     <div class="stat g"><div class="num">3</div><div class="lbl">Fixes learned</div></div>
   </div>
   <h2>Learned <span class="c">fixes</span> · procedural memory</h2>
@@ -45,11 +45,11 @@
     <thead><tr><th>Trust</th><th>Failure signature</th><th>Verified fix</th></tr></thead>
     <tbody>
       <tr><td class="v">✓ verified</td>
-          <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
-          <td class="fix">strip base64, rebuild via write_page, ensure &lt;/html&gt;</td></tr>
-      <tr><td class="v">✓ verified</td>
           <td class="err">deploy gate refused page failed validation</td>
           <td class="fix">Rebuild the page with write_page (fixed HTML shell, slots only); strip base64/favicon/icon links; ensure the page is complete and ends in &lt;/html&gt; before deploy.</td></tr>
+      <tr><td class="v">✓ verified</td>
+          <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
+          <td class="fix">strip base64, rebuild via write_page, ensure &lt;/html&gt;</td></tr>
       <tr><td class="v">✓ verified</td>
           <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
           <td class="fix">strip base64/favicon, rebuild via write_page, ensure ends &lt;/html&gt;</td></tr></tbody></table></div>
@@ -57,6 +57,9 @@
   <div class="card"><table>
     <thead><tr><th>Brief</th><th>Verdict</th><th>Tokens</th><th>Time</th></tr></thead>
     <tbody>
+      <tr><td>Build a landing page for a craft brewery called </td>
+          <td class="warn">done</td>
+          <td class="num">~668179</td><td class="num">3536s</td></tr>
       <tr><td>Build a landing page for a focus timer app calle</td>
           <td class="warn">done</td>
           <td class="num">~273767</td><td class="num">122s</td></tr>
