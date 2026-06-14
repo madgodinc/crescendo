@@ -94,34 +94,51 @@ REPLY_RULE = (
     "Reply only to Maestro. NEVER @mention any other agent — Maestro routes all work. "
 )
 
+# Model picks. Featherless is the primary provider (Premium, unlimited tokens,
+# reliable); AIMLAPI is the fallback. If the primary call errors or times out,
+# LangChain transparently retries on the fallback — so one provider going down
+# (AIMLAPI returned Cloudflare 522 on 2026-06-14) no longer stalls a run.
+DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")   # strong reasoning + tool calls
+QWEN_CODER = (FEATHERLESS, "Qwen/Qwen3-Coder-Next")     # fast coder, reliable tool calls
+FB_DEEPSEEK = (AIMLAPI, "deepseek-chat")                 # fallback
+FB_GPT4O = (AIMLAPI, "gpt-4o")                            # fallback
+
+# role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
-    "Conductor": ("CONDUCTOR", AIMLAPI, "deepseek-chat",
+    "Conductor": ("CONDUCTOR", DEEPSEEK, FB_DEEPSEEK,
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
-    "Soloist": ("SOLOIST", AIMLAPI, "gpt-4o",
+    "Soloist": ("SOLOIST", QWEN_CODER, FB_GPT4O,
         REPLY_RULE + "You are the Soloist — the engineer. Build the page with the write_page "
         "tool: pass title, body (markup INSIDE <body> only — NO <html>/<head>/<body>/<script>/"
         "<style> tags), css (rules only), js (code only). The HTML shell is fixed for you. Do "
         "NOT add a favicon or base64. Do NOT paste code in chat. Reply with a one-line summary."),
-    "Tuning Fork": ("TUNING_FORK", AIMLAPI, "deepseek-chat",
+    "Tuning Fork": ("TUNING_FORK", DEEPSEEK, FB_DEEPSEEK,
         REPLY_RULE + "You are the Tuning Fork — the critic. Use list_files then read_file to read "
         "the Soloist's code yourself — never expect it in chat. CHECK FIRST that the file is "
         "complete and not truncated (must end with </html>); if truncated or empty, that's an "
         "ISSUE. Then review correctness. Reply 'CLEAN' only if the file is whole and works, else "
         "'ISSUES: ...' with concrete fixes."),
-    "Stage Tech": ("STAGE_TECH", AIMLAPI, "deepseek-chat",
+    "Stage Tech": ("STAGE_TECH", QWEN_CODER, FB_DEEPSEEK,
         REPLY_RULE + "You are the Stage Tech — the deployer. Call deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
-    "Archivist": ("ARCHIVIST", AIMLAPI, "deepseek-chat",
+    "Archivist": ("ARCHIVIST", DEEPSEEK, FB_DEEPSEEK,
         REPLY_RULE + "You are the Archivist — memory. Use remember to store what you're told, "
         "recall to fetch context, and reply with a one-line confirmation or summary."),
 }
 
 
-def build(prefix, provider, model, role) -> Agent:
-    base_url, api_key = provider
-    llm = ChatOpenAI(model=model, base_url=base_url, api_key=api_key,
-                     temperature=0, max_tokens=8192)
+def _llm(spec):
+    """One resilient chat model: bounded timeout + a couple retries on the spec's
+    (provider, model)."""
+    (base_url, api_key), model = spec
+    return ChatOpenAI(model=model, base_url=base_url, api_key=api_key,
+                      temperature=0, max_tokens=8192, timeout=90, max_retries=2)
+
+
+def build(prefix, primary, fallback, role) -> Agent:
+    # primary with a fallback model — survives a provider outage transparently
+    llm = _llm(primary).with_fallbacks([_llm(fallback)])
     tools = build_memory_tools(os.environ[f"MGIMIND_TOKEN_{prefix}"])
     if prefix == "STAGE_TECH":
         tools = tools + build_deploy_tools()          # read + deploy (with validate gate)
@@ -142,11 +159,11 @@ def build(prefix, provider, model, role) -> Agent:
 
 async def main() -> None:
     agents = []
-    for name, (prefix, provider, model, role) in ROSTER.items():
-        a = build(prefix, provider, model, role)
+    for name, (prefix, primary, fallback, role) in ROSTER.items():
+        a = build(prefix, primary, fallback, role)
         await a.start()
         agents.append((name, a))
-        log.info("listening: %s (%s)", name, model)
+        log.info("listening: %s (%s, fallback %s)", name, primary[1], fallback[1])
     log.info("=== %d worker agents listening — start maestro.py ===", len(agents))
     try:
         await asyncio.Event().wait()

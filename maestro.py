@@ -41,7 +41,7 @@ load_dotenv("/home/madgodinc/code/crescendo/.env")
 
 REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
-REPLY_TIMEOUT = 120      # seconds to wait for an agent's reply
+REPLY_TIMEOUT = 200      # wait for a reply; allows the agent's LLM fallback (≤90s+90s) to complete
 MAX_REVIEW_ROUNDS = 3    # bounded code<->review negotiation
 
 # Which skill libraries the Archivist pulls from for each role. This is the
