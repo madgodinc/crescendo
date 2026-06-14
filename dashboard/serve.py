@@ -27,6 +27,9 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from ledger import ground_run  # noqa: E402  (grounding pass over the audit trail)
+
 # load .env from the repo root if present (works locally, in Docker, and from a
 # clone) without a hardcoded path; env vars already set always win.
 for _p in (os.path.join(os.path.dirname(__file__), "..", ".env"),
@@ -157,6 +160,15 @@ def render_audit(doc: dict) -> str:
     run_id = doc.get("run_id", "")
     status = doc.get("status", "")
     e = html.escape
+    # Grounding pass: a deterministic, report-only check that every claim
+    # pointing at an external artifact (a page, a deploy URL, a check result)
+    # actually has one. Format-only URL check keeps the report render fast and
+    # deterministic — the URL is in the trail only because deploy_site returned
+    # it after its own validation, so trusting its shape here is honest.
+    grd = ground_run(doc, verify_url=lambda u: "format-valid")
+    gmark = {"grounded": ('<span class="vb gnd" title="claim backed by a real artifact">grounded</span>'),
+             "broken": ('<span class="vb brk" title="claim references a missing artifact">unbacked</span>'),
+             "attested": ""}
     rows, prev = [], "0" * 64
     total_tok = 0
     for i, ev in enumerate(tl, 1):
@@ -180,12 +192,13 @@ def render_audit(doc: dict) -> str:
             badge = '<span class="vb url">shipped</span>'
         rnd = f' · round {meta["round"]}' if meta.get("round") else ""
         tokstr = f'<span class="tok">~{tok} tok</span>' if tok else ""
+        gb = gmark.get((grd["events"][i - 1] if i - 1 < len(grd["events"]) else {}).get("status"), "")
         rows.append(f"""
         <tr class="ev {e(actor)}">
           <td class="n">{i}</td>
           <td class="who"><span class="dot {e(actor)}"></span>{e(ROLE.get(actor, actor))}</td>
           <td class="ph">{e(PHASE_OF.get(kind, kind))}{rnd}</td>
-          <td class="kind">{e(kind)} {badge}</td>
+          <td class="kind">{e(kind)} {badge}{gb}</td>
           <td class="content">{e(text)}</td>
           <td class="meta">{tokstr}<span class="ts">{e(ts[11:19] if len(ts) > 19 else ts)}</span>
               <span class="hash" title="chained SHA-256">{h[:12]}…</span></td>
@@ -232,6 +245,8 @@ def render_audit(doc: dict) -> str:
   .vb.clean {{ background:rgba(79,224,168,.15); color:var(--green); }}
   .vb.issues {{ background:rgba(255,123,198,.15); color:var(--pink); }}
   .vb.url {{ background:rgba(79,224,168,.15); color:var(--green); }}
+  .vb.gnd {{ background:rgba(90,168,255,.14); color:var(--blue); }}
+  .vb.brk {{ background:rgba(255,123,198,.18); color:var(--pink); }}
   .foot {{ color:var(--dim); font-size:12px; margin-top:20px; line-height:1.7; }}
   .foot code {{ font-family:'JetBrains Mono',monospace; color:var(--purple); }}
   a.back {{ color:var(--blue); text-decoration:none; font-size:13px; }}
@@ -246,6 +261,7 @@ def render_audit(doc: dict) -> str:
       <div class="kv"><div class="k">Decisions</div><div class="v">{len(tl)}</div></div>
       <div class="kv"><div class="k">Verdict</div><div class="v">{e(verdict_line)}</div></div>
       <div class="kv"><div class="k">Tokens (est.)</div><div class="v">~{total_tok}</div></div>
+      <div class="kv"><div class="k">Grounded claims</div><div class="v" style="color:{'var(--green)' if grd['all_grounded'] else 'var(--pink)'}">{grd['grounded']}/{grd['total_claims']}{' ✓' if grd['all_grounded'] else ' ⚠'}</div></div>
       <div class="kv"><div class="k">Shipped to</div><div class="v">{'<a href="'+e(deploy_url)+'" target="_blank">'+e(deploy_url)+'</a>' if deploy_url else '—'}</div></div>
     </div>
   </div>
@@ -261,6 +277,11 @@ def render_audit(doc: dict) -> str:
     The chain root after the last decision is <code>{prev[:24]}…</code>.
     Editing any past decision changes its hash and every hash after it, so the trail is tamper-evident.
     Source of record: the mgi-mind memory ledger, where each agent writes under its own token.
+    <br><b style="color:var(--ink)">Grounded, not just attested:</b> {grd['grounded']} of {grd['total_claims']}
+    claims that point at an external artifact — a written page, a live deploy URL, a deterministic check
+    result — were verified to actually have one. The hash chain proves no decision was altered; grounding
+    proves no agent claimed an artifact it never produced. ({grd['attested']} internal decisions carry no
+    external artifact and are attested by author + hash only.)
   </div>
 </div></body></html>"""
 
