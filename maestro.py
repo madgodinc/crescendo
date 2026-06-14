@@ -438,9 +438,19 @@ class Maestro:
                             await self._push_live("failed", self._phase)
                             await update_active(ARCHIVIST_TOKEN, self._run_key, brief,
                                                 "failed", datetime.now(timezone.utc).isoformat())
+                        # A provider going silent is recoverable: the phases that
+                        # finished are checkpointed, so re-sending the same brief
+                        # resumes from where it died. Say so, instead of reading as
+                        # a dead end.
+                        if isinstance(e, TimeoutError):
+                            note = (f"⚠️ A model went quiet at the '{self._phase}' phase. "
+                                    f"The finished phases are checkpointed — send the same "
+                                    f"brief again and the run resumes from here, no rework.")
+                        else:
+                            note = f"⚠️ Failed: {type(e).__name__}: {e}"
                         await self.rc.agent_api_messages.create_agent_chat_message(
                             command_room,
-                            message=ChatMessageRequest(content=f"⚠️ Failed: {type(e).__name__}: {e}", mentions=self_m))
+                            message=ChatMessageRequest(content=note, mentions=self_m))
                         log("error", f"{type(e).__name__}: {e}")
                     # after a run, ignore everything up to now so we wait for the NEXT brief
                     seen = {x.id for x in await self._room_messages(command_room)}

@@ -63,14 +63,19 @@ class AutoReplyLangGraphAdapter(LangGraphAdapter):
             self._handle_stream_event = orig_handle
             tools.send_message = orig_send
 
-        # fallback delivery: model produced text but never sent it
+        # fallback delivery: model produced text but never sent it. A lost reply
+        # is what makes the Maestro wait out a full timeout, so retry once before
+        # giving up — a transient Band hiccup shouldn't strand the reply.
         if not sent["any"] and final_text["v"]:
-            try:
-                await tracked_send(content=final_text["v"],
-                                   mentions=[os.environ["MAESTRO_AGENT_ID"]])
-                logging.getLogger("agents").info("AUTOREPLY delivered %d chars", len(final_text["v"]))
-            except Exception as e:
-                logging.getLogger("agents").warning("auto-reply failed: %s", e)
+            log = logging.getLogger("agents")
+            for attempt in (1, 2):
+                try:
+                    await tracked_send(content=final_text["v"],
+                                       mentions=[os.environ["MAESTRO_AGENT_ID"]])
+                    log.info("AUTOREPLY delivered %d chars", len(final_text["v"]))
+                    break
+                except Exception as e:
+                    log.warning("auto-reply send failed (try %d): %s", attempt, e)
 
 from deploy_tools import build_author_tools, build_deploy_tools, build_review_tools
 from memory_tools import build_memory_tools

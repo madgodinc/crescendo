@@ -144,7 +144,7 @@
   .tokchip { font-family:var(--mono); font-size:11px; color:var(--archivist); padding:4px 11px;
              border:1px solid rgba(184,155,255,.4); border-radius:20px; background:rgba(184,155,255,.08);
              white-space:nowrap; transition:opacity .3s; }
-  .auditbtn { font-size:12px; font-weight:600; color:var(--green); text-decoration:none;
+  .auditbtn { font-size:12px; font-weight:600; color:var(--soloist); text-decoration:none;
               padding:6px 13px; border:1px solid rgba(79,224,168,.45); border-radius:20px;
               background:rgba(79,224,168,.08); white-space:nowrap; transition:.15s; }
   .auditbtn:hover { background:rgba(79,224,168,.16); box-shadow:0 0 14px rgba(79,224,168,.25); }
@@ -627,13 +627,17 @@ const Graph = (() => {
     if (n) { drag = { n, dx:n.x-x, dy:n.y-y }; dragMoved=false; cvs.style.cursor='grabbing'; e.preventDefault(); }
   });
   window.addEventListener('mousemove', e => {
-    if (drag) { const [x,y] = evPos(e);
-      drag.n.x = x+drag.dx; drag.n.y = y+drag.dy; dragMoved=true;
+    if (drag) { const [x,y] = evPos(e); const m = drag.n.r*1.6;
+      drag.n.x = Math.max(m, Math.min(W-m, x+drag.dx));     // keep the orb on-canvas
+      drag.n.y = Math.max(m, Math.min(H-m, y+drag.dy));
+      dragMoved=true;
       drag.n.pinX = drag.n.x/W; drag.n.pinY = drag.n.y/H;   // remember (survives resize)
       drag.n.glow = Math.max(drag.n.glow, .6);
     } else { const [x,y] = evPos(e); cvs.style.cursor = hit(x,y) ? 'grab' : 'default'; }
   });
-  window.addEventListener('mouseup', () => { if (drag){ drag=null; cvs.style.cursor='grab'; } });
+  window.addEventListener('mouseup', e => {
+    if (drag){ drag=null; const [x,y]=evPos(e); cvs.style.cursor = hit(x,y)?'grab':'default'; }
+  });
   // double-click an agent to release it back to the hexagon
   cvs.addEventListener('dblclick', e => {
     const [x,y] = evPos(e); const n = hit(x,y);
@@ -777,7 +781,8 @@ function loadDoc(doc, opts={}) {
 }
 
 async function pollLive() {
-  let doc; try { doc = await fetch('/api/live').then(r=>r.json()); }
+  // bound the request so a hung server can't freeze the poll loop silently
+  let doc; try { doc = await fetch('/api/live', {signal: AbortSignal.timeout(5000)}).then(r=>r.json()); }
   catch { setStatus('offline'); return; }
   if (!doc || doc.status==='idle') {
     if (!timeline.length) el('feed').innerHTML =
