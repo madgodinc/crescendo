@@ -35,6 +35,47 @@ a specific author and provable after the fact.
 Control flows Conductor → room → agent → room → Conductor. The coordination
 happens *through* Band, not around it.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    H([Human brief]) -->|Band room| M
+    subgraph BAND["Band — the coordination layer, one shared room"]
+        M{{Maestro: conducts}}
+        M <-->|mention, reply| C[Conductor: plans]
+        M <-->|mention, reply| S[Soloist: writes code]
+        M <-->|mention, reply| T[Tuning Fork: reviews]
+        M <-->|mention, reply| D[Stage Tech: deploys]
+        M <-->|mention, reply| A[Archivist: memory and skills]
+    end
+    A -. skills, recall, learn .-> S
+    A -. skills .-> C
+    A -. skills .-> T
+    BRAIN[(mgi-mind: memory, audit, skills)]
+    A <--> BRAIN
+    M -->|live state, checkpoints, audit| BRAIN
+    D -->|deploy| CF[(Cloudflare Pages: live URL)]
+    BRAIN --> DASH[Dashboard: audit report, flywheel]
+```
+
+Solid lines are control flow through Band; dotted lines are the Archivist feeding
+skills and recalled fixes straight to the worker that needs them.
+
+## How Band does the work
+
+Band is the visible coordination layer, not a pipe behind the orchestrator. Every
+handoff runs through real Band primitives:
+
+- **One shared room** holds the whole run; agents are pulled in as participants.
+- **`@mention` routing** drives each step — the Maestro addresses exactly one
+  agent per turn (`mentions=[...]`), and a `GatedAdapter` makes a worker act only
+  when it's the one mentioned, so nobody speaks out of turn.
+- **Replies land back in the room**; the Maestro reads them by `sender_id` since a
+  timestamp. An `AutoReplyLangGraphAdapter` guarantees an agent's plain-text reply
+  reaches the room even when the model forgets to call the send tool.
+- The star topology (everything through the Maestro) makes the classic
+  agents-ping-pong-forever failure impossible.
+
 ## How coordination works
 
 Crescendo runs as a star. Every agent reports to the Conductor and waits until the
