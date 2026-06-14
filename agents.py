@@ -161,8 +161,11 @@ ROSTER = {
         "term from the brief as must_contain) to RUN a deterministic check: structure + a headless "
         "browser render reporting console/JS errors and visible content. If check_page reports "
         "CHECK FAILED, those are ISSUES — list them. Then ALSO read the code (list_files, read_file) "
-        "and review correctness against the brief. Reply 'CLEAN' only if check_page PASSED and the "
-        "code is right, else 'ISSUES: ...' with concrete fixes. Write the review in English."),
+        "and review correctness against the brief. Before deciding, adversarially state the single "
+        "strongest reason this page would fail or embarrass in production (a real edge case, not "
+        "nitpicking); if that reason holds, it is an ISSUE. Reply 'CLEAN' only if check_page PASSED, "
+        "the code is right, and that worst-case reason does not hold — else 'ISSUES: ...' with "
+        "concrete fixes. Write the review in English."),
     "Stage Tech": ("STAGE_TECH", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Stage Tech — the deployer. CALL deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),

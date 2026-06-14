@@ -29,8 +29,10 @@
   <a class="back" href="/">← dashboard</a>
   <h1>The flywheel · <span class="a">Crescendo</span></h1>
   <div class="sub">Every time the orchestra recovers from a failure, it writes the fix to memory.
-     Next time that class of problem appears, it recalls the fix instead of rediscovering it —
-     so it gets cheaper and more accurate the longer it runs.</div>
+     Next time that class of problem appears, it recalls the fix instead of rediscovering it,
+     so it gets cheaper and more accurate the longer it runs. The numbers below are operational
+     stats over the 2 recorded runs on this instance, not a
+     benchmark — small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
   <div class="stats">
     <div class="stat gold"><div class="num">2</div><div class="lbl">Runs</div></div>
     <div class="stat g"><div class="num">50%</div><div class="lbl">Shipped clean</div></div>
@@ -43,11 +45,11 @@
     <thead><tr><th>Trust</th><th>Failure signature</th><th>Verified fix</th></tr></thead>
     <tbody>
       <tr><td class="v">✓ verified</td>
-          <td class="err">deploy gate refused page failed validation</td>
-          <td class="fix">Rebuild the page with write_page (fixed HTML shell, slots only); strip base64/favicon/icon links; ensure the page is complete and ends in &lt;/html&gt; before deploy.</td></tr>
-      <tr><td class="v">✓ verified</td>
           <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
           <td class="fix">strip base64, rebuild via write_page, ensure &lt;/html&gt;</td></tr>
+      <tr><td class="v">✓ verified</td>
+          <td class="err">deploy gate refused page failed validation</td>
+          <td class="fix">Rebuild the page with write_page (fixed HTML shell, slots only); strip base64/favicon/icon links; ensure the page is complete and ends in &lt;/html&gt; before deploy.</td></tr>
       <tr><td class="v">✓ verified</td>
           <td class="err">deploy gate refused &lt;path&gt; junk in page</td>
           <td class="fix">strip base64/favicon, rebuild via write_page, ensure ends &lt;/html&gt;</td></tr></tbody></table></div>
@@ -61,6 +63,8 @@
       <tr><td>Build a modern landing page for a habit-tracking</td>
           <td class="warn">done</td>
           <td class="num">~820</td><td class="num">60s</td></tr></tbody></table></div>
-  <div class="note">A verified fix carries a deterministic signal (the rebuilt page passed the deploy gate).
-    Watch this list grow across runs — that growth is the flywheel.</div>
+  <div class="note">"Shipped clean" means the page passed our own deterministic check (headless render,
+    no console errors, content present), not an external benchmark. A verified fix carries the same
+    deterministic signal: the rebuilt page passed the deploy gate. Watch this list grow across runs.
+    That growth is the flywheel.</div>
 </div></body></html>

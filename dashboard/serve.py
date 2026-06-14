@@ -335,8 +335,10 @@ def render_flywheel(active: dict) -> str:
   <a class="back" href="/">← dashboard</a>
   <h1>The flywheel · <span class="a">Crescendo</span></h1>
   <div class="sub">Every time the orchestra recovers from a failure, it writes the fix to memory.
-     Next time that class of problem appears, it recalls the fix instead of rediscovering it —
-     so it gets cheaper and more accurate the longer it runs.</div>
+     Next time that class of problem appears, it recalls the fix instead of rediscovering it,
+     so it gets cheaper and more accurate the longer it runs. The numbers below are operational
+     stats over the {stats['n']} recorded run{'s' if stats['n'] != 1 else ''} on this instance, not a
+     benchmark — small N, our own briefs, our own checks. They show the mechanism working, not a score.</div>
   <div class="stats">
     <div class="stat gold"><div class="num">{stats['n']}</div><div class="lbl">Runs</div></div>
     <div class="stat g"><div class="num">{stats['clean_pct']}%</div><div class="lbl">Shipped clean</div></div>
@@ -352,8 +354,10 @@ def render_flywheel(active: dict) -> str:
   <div class="card"><table>
     <thead><tr><th>Brief</th><th>Verdict</th><th>Tokens</th><th>Time</th></tr></thead>
     <tbody>{run_rows}</tbody></table></div>
-  <div class="note">A verified fix carries a deterministic signal (the rebuilt page passed the deploy gate).
-    Watch this list grow across runs — that growth is the flywheel.</div>
+  <div class="note">"Shipped clean" means the page passed our own deterministic check (headless render,
+    no console errors, content present), not an external benchmark. A verified fix carries the same
+    deterministic signal: the rebuilt page passed the deploy gate. Watch this list grow across runs.
+    That growth is the flywheel.</div>
 </div></body></html>"""
 
 
