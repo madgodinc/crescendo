@@ -98,6 +98,18 @@
   .now .wave i:nth-child(4){ animation-delay:.45s }
   @keyframes eq { 0%,100%{ height:4px } 50%{ height:14px } }
 
+  /* idle hero — inviting first impression over the breathing orbs */
+  .idle { position:absolute; top:50%; left:50%; transform:translate(-50%,calc(-50% - 4px));
+          text-align:center; pointer-events:none; opacity:0; transition:opacity .4s; z-index:3; }
+  .idle.show { opacity:1; }
+  .idle-title { font-size:15px; font-weight:600; letter-spacing:.18em; text-transform:uppercase;
+                color:var(--dim); margin-bottom:14px; }
+  .idle-cmd { font-family:var(--mono); font-size:13px; color:var(--ink); padding:11px 18px;
+              border:1px solid var(--line); border-radius:10px; background:rgba(16,22,38,.72);
+              backdrop-filter:blur(8px); }
+  .idle-cmd .prompt { color:var(--maestro); margin-right:8px; }
+  .idle-cmd .arg { color:var(--soloist); }
+
   /* phase rail bottom-left over the canvas */
   .rail { position:absolute; left:24px; bottom:22px; display:flex; gap:10px;
           padding:10px 14px; border-radius:14px; background:var(--panel);
@@ -181,6 +193,10 @@
   <div class="stage">
     <canvas id="graph"></canvas>
     <div class="now" id="now"></div>
+    <div class="idle" id="idle">
+      <div class="idle-title">Awaiting a brief</div>
+      <div class="idle-cmd"><span class="prompt">$</span> uv run python maestro.py <span class="arg">"build a dark-themed timer page"</span></div>
+    </div>
     <div class="rail" id="rail"></div>
   </div>
 
@@ -214,20 +230,32 @@ const el = id => document.getElementById(id);
 
 let timeline = [], rendered = 0, curRunId = null, selectedRun = null, curPhase = 'rider';
 
-// glyph per agent — recognisable shape, drawn in node core and feed rows
-const GLYPH = { maestro:'❖', conductor:'⤳', soloist:'♪', tuningfork:'⚖',
-                stagetech:'⚙', archivist:'❀', human:'☉' };
+// glyph per agent — a coherent MONOCHROME set (no emoji-presentation chars like
+// ⚖/⚙ that render color on mac, no obscure ⤳ that tofus on Windows).
+const GLYPH = { maestro:'◆', conductor:'▲', soloist:'♪', tuningfork:'◈',
+                stagetech:'▣', archivist:'✦', human:'●' };
+// canvas ctx.font cannot resolve CSS var(); use the literal family names.
+const FONT_UI = "'Space Grotesk',system-ui,sans-serif";
 
 // ── canvas graph engine ─────────────────────────────────────────────────────
 const Graph = (() => {
   const cvs = el('graph'), ctx = cvs.getContext('2d');
-  let W=0, H=0, DPR=1, nodes=[], edges={}, particles=[], last=0, intro=0;
+  let W=0, H=0, DPR=1, nodes=[], edges={}, particles=[], motes=[], shock=[], last=0, intro=0;
 
+  function seedMotes() {
+    motes = [];
+    const n = Math.round((W*H)/26000);   // density scales with area
+    for (let i=0;i<n;i++) motes.push({
+      x:Math.random()*W, y:Math.random()*H,
+      vx:(Math.random()-.5)*6, vy:(Math.random()-.5)*6,
+      r:Math.random()*1.4+0.3, a:Math.random()*0.4+0.1, ph:Math.random()*6.28 });
+  }
   function resize() {
     DPR = Math.min(window.devicePixelRatio||1, 2);
     const r = cvs.getBoundingClientRect();
     W = r.width; H = r.height;
     cvs.width = W*DPR; cvs.height = H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
+    seedMotes();
     layout();
   }
   function layout() {
@@ -265,6 +293,21 @@ const Graph = (() => {
     const dir = (kind==='code'||kind==='review'||kind==='skills'||kind==='recall'||kind==='learn') ? 'both'
               : (actor==='human'||actor==='conductor') ? 'out' : 'in';
     spawn(id, col, dir);
+    if (kind==='deploy') celebrate();
+  }
+  function celebrate() {  // deploy = the climax — make it spectacular
+    const m = node('maestro'), s = node('stagetech');
+    const col = COLOR.stagetech;
+    if (s) shock.push({ x:s.x, y:s.y, t:0, dur:1.1, speed:260, col });
+    if (m) { shock.push({ x:m.x, y:m.y, t:0, dur:1.4, speed:340, col:COLOR.maestro });
+      m.glow = 1.6; m.pulse = 1.6; }
+    // radial particle burst from the hub
+    for (let i=0;i<40;i++){
+      const a = (i/40)*6.283, sp = 80+Math.random()*120;
+      particles.push({ id:'soloist', col:i%2?COLOR.maestro:COLOR.soloist, p:0, dir:1,
+        speed:0, free:true, x:m.x, y:m.y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp,
+        life:1, trail:[] });
+    }
   }
   function spawn(id, col, dir) {
     const n = node(id); if(!n) return;
@@ -283,6 +326,25 @@ const Graph = (() => {
     ctx.clearRect(0,0,W,H);
     const m = node('maestro'); if(!m) { requestAnimationFrame(draw); return; }
     const T = now/1000;
+
+    // ambient motes drifting in the void, faintly pulled toward the hub
+    for (const p of motes) {
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      const dx=m.x-p.x, dy=m.y-p.y, d=Math.hypot(dx,dy)||1;
+      p.vx += (dx/d)*2*dt; p.vy += (dy/d)*2*dt;
+      p.vx*=0.999; p.vy*=0.999;
+      if (p.x<0)p.x=W; if(p.x>W)p.x=0; if(p.y<0)p.y=H; if(p.y>H)p.y=0;
+      const tw = p.a*(0.6+0.4*Math.sin(T*1.5+p.ph));
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7);
+      ctx.fillStyle = `rgba(150,175,235,${tw})`; ctx.fill();
+    }
+    // deploy shockwaves
+    for (let i=shock.length-1;i>=0;i--){
+      const s=shock[i]; s.t+=dt; const k=s.t/s.dur;
+      if (k>=1){ shock.splice(i,1); continue; }
+      ctx.beginPath(); ctx.arc(s.x,s.y, s.t*s.speed, 0, 7);
+      ctx.strokeStyle = hex(s.col, (1-k)*0.5); ctx.lineWidth = 3*(1-k); ctx.stroke();
+    }
 
     // edges — channels with ambient shimmer + flow glow, grow in on intro
     nodes.filter(n=>n.id!=='maestro').forEach(n => {
@@ -308,6 +370,13 @@ const Graph = (() => {
     for (let i=particles.length-1;i>=0;i--) {
       const pr = particles[i];
       if (pr.delay>0) { pr.delay-=dt; continue; }
+      if (pr.free) {  // celebration burst: free-flying, gravity-free, fades out
+        pr.x+=pr.vx*dt; pr.y+=pr.vy*dt; pr.vx*=0.96; pr.vy*=0.96; pr.life-=dt*0.9;
+        if (pr.life<=0){ particles.splice(i,1); continue; }
+        ctx.beginPath(); ctx.arc(pr.x,pr.y, 2.2*pr.life+0.5,0,7);
+        ctx.fillStyle=hex(pr.col,pr.life); ctx.shadowColor=pr.col; ctx.shadowBlur=10*pr.life;
+        ctx.fill(); ctx.shadowBlur=0; continue;
+      }
       const n = node(pr.id); if(!n){ particles.splice(i,1); continue; }
       pr.p += pr.speed*pr.dir*dt;
       if (pr.p<=0 || pr.p>=1) { particles.splice(i,1); continue; }
@@ -350,19 +419,23 @@ const Graph = (() => {
       ctx.lineWidth = (isHub?2.5:2) + n.glow*2;
       ctx.strokeStyle = hex(col, 0.55 + n.glow*0.45);
       ctx.shadowColor = col; ctx.shadowBlur = (isHub?16:9) + n.glow*26; ctx.stroke(); ctx.shadowBlur=0;
-      if (isHub) { // second ring for the hub
+      if (isHub) { // hub: a slow counter-rotating dashed ring — the conductor's baton
         ctx.beginPath(); ctx.arc(n.x,n.y, r*1.18, 0, 7);
         ctx.strokeStyle = hex(col, 0.18); ctx.lineWidth=1; ctx.stroke();
+        ctx.save(); ctx.translate(n.x,n.y); ctx.rotate(T*0.35);
+        ctx.beginPath(); ctx.arc(0,0, r*1.34, 0, 7);
+        ctx.setLineDash([2, 10]); ctx.strokeStyle = hex(col, 0.3+n.glow*0.3);
+        ctx.lineWidth=1.5; ctx.stroke(); ctx.setLineDash([]); ctx.restore();
       }
       // glyph in core
       ctx.fillStyle = hex('#ffffff', 0.92);
-      ctx.font = `${Math.round(r*0.7)}px var(--ui)`;
+      ctx.font = `${Math.round(r*0.62)}px ${FONT_UI}`;
       ctx.textAlign='center'; ctx.textBaseline='middle';
       ctx.fillText(GLYPH[n.id]||'●', n.x, n.y+1);
       // label — radially OUTWARD with dark halo
       const lx = isHub ? n.x : n.x + Math.cos(n.ang)*(r+15);
       const ly = isHub ? n.y + r + 16 : n.y + Math.sin(n.ang)*(r+15);
-      ctx.font = (isHub?'600 15px':'500 12.5px')+' var(--ui)';
+      ctx.font = (isHub?`600 15px ${FONT_UI}`:`500 12.5px ${FONT_UI}`);
       ctx.textBaseline = isHub ? 'top' : 'middle';
       ctx.textAlign = isHub ? 'center' : (Math.cos(n.ang)<-0.3?'right':(Math.cos(n.ang)>0.3?'left':'center'));
       ctx.lineWidth=3; ctx.strokeStyle='rgba(6,8,15,.9)'; ctx.strokeText(n.label, lx, ly);
@@ -456,6 +529,8 @@ function setStatus(status, phase) {
   const last = timeline[timeline.length-1];
   if (last) updateNow(last.actor, last.kind, status);
   else el('now').classList.remove('show');
+  // idle hero shows only when truly idle (no run loaded)
+  el('idle').classList.toggle('show', status==='idle' && !timeline.length);
 }
 
 // ── data layer (unchanged contract: /api/live, /api/runs, /api/run/<id>) ─────
