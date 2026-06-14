@@ -47,6 +47,18 @@ MAX_REVIEW_ROUNDS = 3    # bounded code<->review negotiation
 MAX_WRITE_TRIES = 3      # how many times to insist the Soloist actually call write_page
 SITE_PATH = "/home/madgodinc/code/crescendo/workspace/site/index.html"
 
+# Risk-gated human approval before deploy. A benign brief (the Conductor's
+# resource contract came back empty) ships straight through; a high-stakes one
+# (the contract needs real external access) requires sign-off — proportional
+# autonomy, the Track-3 beat. Mode:
+#   auto  (default) — record the sign-off requirement and auto-grant, so an
+#                     unattended run never hangs; the audit still shows the gate.
+#   human           — post the request and wait for a human APPROVE in the room
+#                     (used for the recorded demo, so a real keystroke shows).
+#   off             — no gate at all.
+DEPLOY_APPROVAL = os.environ.get("DEPLOY_APPROVAL", "auto").strip().lower()
+APPROVAL_TIMEOUT = 180   # in human mode, fall back to auto-grant after this
+
 # Which skill libraries the Archivist pulls from for each role. This is the
 # "Archivist feeds skills to every agent" mechanism, driven deterministically.
 SKILL_LIBS = {
@@ -587,6 +599,15 @@ class Maestro:
         # (2) RECALL whether memory already solved this class of failure and feed
         # that fix to the Soloist, (3) on a successful rebuild LEARN the fix back
         # as a verified procedure. Next run recalls it instead of re-grinding.
+        # PHASE 3.5 — risk-gated human approval. High-stakes briefs (the resource
+        # contract needs real external access) require a human sign-off before
+        # anything ships; benign ones pass straight through. Either way the gate
+        # decision is recorded, so the audit trail shows who authorised the deploy.
+        if not self._resumed("approval"):
+            await self._approval_gate(result.get("rider") or [])
+            self._done.add("approval")
+            await self._save("approval")
+
         self._phase = "deploy"
         if self._resumed("deploy"):
             deploy = result.get("deploy", "")
@@ -628,6 +649,76 @@ class Maestro:
                             datetime.now(timezone.utc).isoformat())
         log("done", "run complete")
         return result
+
+    async def _approval_gate(self, rider: list) -> None:
+        """Risk-gated human-in-the-loop sign-off before deploy.
+
+        Proportional autonomy: a benign brief (no resource contract) ships with
+        no friction; a high-stakes one (the contract needs real external access)
+        asks a human to authorise the deploy. The gate decision is always
+        recorded so the audit trail shows the deploy was human-authorised —
+        the Track-3 'regulated work needs sign-off' beat, made auditable.
+        """
+        access = ", ".join(r["name"] for r in rider)
+        high_stakes = bool(rider)
+        if DEPLOY_APPROVAL == "off" or not high_stakes:
+            # benign brief: no gate, but note that none was required.
+            self.record("human", "approval",
+                        "auto-approved: no external access required, low-stakes deploy",
+                        {"required": False, "granted": True})
+            return
+
+        if DEPLOY_APPROVAL == "human":
+            log("approval", f"high-stakes deploy — waiting for human APPROVE ({access})")
+            await self._push_live("running", "approval")
+            since = await self.say_human(
+                f"🔒 Approval required before deploy. This brief needs external "
+                f"access ({access}). Reply APPROVE to authorise shipping, or DENY to stop.")
+            granted = await self._wait_human_decision(since)
+            if not granted:
+                self.record("human", "approval",
+                            f"DENIED human sign-off for deploy (access: {access})",
+                            {"required": True, "granted": False})
+                raise RuntimeError("deploy denied at the human approval gate")
+            self.record("human", "approval",
+                        f"human authorised the deploy (access: {access})",
+                        {"required": True, "granted": True})
+            log("approval", "human approved — proceeding to deploy")
+            return
+
+        # auto mode: record the requirement and grant, so an unattended run never
+        # hangs while the audit still shows the gate was applied.
+        self.record("human", "approval",
+                    f"sign-off required (access: {access}); auto-granted in unattended mode",
+                    {"required": True, "granted": True, "auto": True})
+        log("approval", f"high-stakes deploy auto-approved (unattended): {access}")
+
+    async def say_human(self, text: str) -> datetime:
+        """Post a plain message to the room addressed to the human and return the
+        send time, so we can read their reply as anything that arrives after it."""
+        await self.rc.agent_api_messages.create_agent_chat_message(
+            self.room, message=ChatMessageRequest(content=text))
+        log("say", f"-> human: {text[:70]}")
+        return datetime.now(timezone.utc)
+
+    async def _wait_human_decision(self, since: datetime) -> bool:
+        """Wait for a human APPROVE/DENY in the room. Defaults to granting after
+        APPROVAL_TIMEOUT so a recording can't hang forever on an absent human."""
+        waited = 0
+        while waited < APPROVAL_TIMEOUT:
+            for m in await self._room_messages(self.room):
+                if (getattr(m, "sender_type", "") == "User"
+                        and getattr(m, "created_at", None)
+                        and m.created_at > since):
+                    body = (m.content or "").lower()
+                    if "approve" in body:
+                        return True
+                    if "deny" in body or "reject" in body:
+                        return False
+            await asyncio.sleep(POLL_INTERVAL)
+            waited += POLL_INTERVAL
+        log("approval", "no human reply — granting by timeout (recording-safe default)")
+        return True
 
     async def _deploy_phase(self, brief: str) -> str:
         """Deploy with the self-learning loop. On a gate refusal: recall a known

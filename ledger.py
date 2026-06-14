@@ -35,7 +35,7 @@ _DEPLOY_KINDS = {"deploy"}      # the Stage Tech shipped a live URL
 _CHECK_KINDS = {"review"}       # the Tuning Fork ran a deterministic check
 # kinds that are internal decisions — real, attributed, hash-chained, but with
 # no external artifact to point at, so they don't count toward the ratio.
-_ATTESTED_KINDS = {"brief", "rider", "plan", "archive", "recall", "learn", "skills"}
+_ATTESTED_KINDS = {"brief", "rider", "plan", "archive", "recall", "learn", "skills", "approval"}
 
 _PAGES_URL = re.compile(r"https://[\w.-]+\.pages\.dev\S*")
 SITE_PATH = os.environ.get(

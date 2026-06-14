@@ -144,7 +144,8 @@ ROLE = {"human": "Human", "conductor": "Conductor", "soloist": "Soloist",
         "tuningfork": "Tuning Fork", "stagetech": "Stage Tech", "archivist": "Archivist"}
 PHASE_OF = {"brief": "Intake", "rider": "Resource contract", "plan": "Plan",
             "skills": "Code ↔ Review", "code": "Code ↔ Review", "review": "Code ↔ Review",
-            "recall": "Deploy", "learn": "Deploy", "deploy": "Deploy", "archive": "Archive"}
+            "approval": "Approval", "recall": "Deploy", "learn": "Deploy",
+            "deploy": "Deploy", "archive": "Archive"}
 
 
 def render_audit(doc: dict) -> str:
