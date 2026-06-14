@@ -113,7 +113,7 @@ def summarize_playbooks(playbooks: list[dict]) -> str:
             "rediscover):\n" + "\n".join(lines))
 
 
-async def fetch_skills(token: str, query: str, libraries: list[str], per_lib: int = 3) -> str:
+async def fetch_skills(token: str, query: str, libraries: list[str], per_lib: int = 2) -> str:
     """Pull the most relevant skills for a task from the given skill libraries.
 
     This is the Archivist's core service: weak models get expert guidance pulled

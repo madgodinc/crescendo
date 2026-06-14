@@ -42,7 +42,7 @@ load_dotenv("/home/madgodinc/code/crescendo/.env")
 
 REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
-REPLY_TIMEOUT = 200      # wait for a reply; allows the agent's LLM fallback (≤90s+90s) to complete
+REPLY_TIMEOUT = 130      # wait for a reply; covers one LLM call + its fallback (70s+70s), no more
 MAX_REVIEW_ROUNDS = 3    # bounded code<->review negotiation
 MAX_WRITE_TRIES = 3      # how many times to insist the Soloist actually call write_page
 SITE_PATH = "/home/madgodinc/code/crescendo/workspace/site/index.html"
