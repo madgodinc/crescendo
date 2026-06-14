@@ -61,43 +61,60 @@ Agents share one memory ([mgi-mind](https://github.com/madgodinc/mgi-mind)) over
 HTTP. Each agent writes with its own token, so every entry carries its author. The
 dashboard reads that trail, so you can replay who decided what and when.
 
-## Watch it live
-
-The dashboard is a window onto the run, fed entirely from memory:
-
-```
-uv run python dashboard/serve.py        # http://127.0.0.1:8000
-```
-
-Maestro publishes each agent turn to mgi-mind; the dashboard polls it and animates
-the orchestra graph and the decision trail as the run unfolds. The state lives in
-memory, not in the process, so the dashboard keeps showing a run even after you
-kill Maestro mid-flight. Relaunch the same brief and the run resumes where it left
-off, and the dashboard picks back up on it.
-
 ## Run it
 
-You need [uv](https://docs.astral.sh/uv/), a running
-[mgi-mind](https://github.com/madgodinc/mgi-mind) HTTP server, and a `.env` with
-Band agent tokens, an LLM provider key (Featherless or AI/ML API), and a
-Cloudflare account for `wrangler`. Then:
+Pick the path that fits how far you want to go. Crescendo needs its brain
+([mgi-mind](https://github.com/madgodinc/mgi-mind)) for memory, the audit trail,
+skills, and crash-resume — the brain is bundled here as a submodule so it comes
+along with a clone.
+
+### 1. Just look (zero setup)
+
+Open the live dashboard — a recorded run with its full decision trail, audit
+report, and learned-fixes view:
+
+**→ https://crescendo-dashboard.pages.dev**
+
+Or, after cloning, double-click `dashboard/index.html`. The recorded run is
+embedded, so it works straight off the filesystem — no server, no keys.
+
+### 2. Run the engine (Docker, one command)
+
+Brings up the brain (on `:8765`) and the dashboard (on `:8000`):
 
 ```
-uv sync                                 # install deps
-
-# 1. start the worker agents (keep running)
-uv run python agents.py
-
-# 2. open the dashboard (keep running)
-uv run python dashboard/serve.py        # http://127.0.0.1:8000
-
-# 3. send a brief
-uv run python maestro.py "build a dark-themed pomodoro timer page"
+git clone --recursive https://github.com/madgodinc/crescendo.git
+cd crescendo
+docker compose up
 ```
 
-Watch the dashboard: the Conductor plans, the Archivist feeds skills, the Soloist
-writes the page, the Tuning Fork reviews it, the Stage Tech deploys it, and the
-Archivist saves the run. The deploy event shows the live URL.
+Open http://localhost:8000. The dashboard talks to a real brain; the recorded run
+is shown until you drive a live one (next). To build the brain from source instead
+of pulling the image:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+```
+
+### 3. Drive the live orchestra (bring your own keys)
+
+The engine is here; the fuel is yours — five [Band](https://band.ai) agents, an LLM
+key (Featherless or AI/ML API), and a Cloudflare account for the deploy. Copy the
+template and fill it in:
+
+```
+cp .env.example .env        # add your Band + LLM + Cloudflare keys
+uv sync                     # install the orchestrator deps
+
+uv run python agents.py     # 1. start the five worker agents (keep running)
+uv run python maestro.py "build a dark-themed pomodoro timer page"   # 2. send a brief
+```
+
+Watch the dashboard at http://localhost:8000 as it happens: the Conductor plans,
+the Archivist feeds skills from memory, the Soloist writes the page, the Tuning
+Fork runs a real check and reviews it, the Stage Tech deploys it, and the Archivist
+saves the run. The deploy event shows the live URL; the **Audit report** button
+opens the tamper-evident trail of every decision.
 
 ## What's built
 

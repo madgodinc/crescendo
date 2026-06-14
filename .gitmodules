@@ -1,0 +1,4 @@
+[submodule "brain"]
+	path = brain
+	url = https://github.com/madgodinc/mgi-mind.git
+	branch = main

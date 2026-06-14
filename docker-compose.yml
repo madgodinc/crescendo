@@ -1,0 +1,50 @@
+# Crescendo + its brain, one command.
+#
+#   docker compose up
+#
+# Brings up:
+#   - brain      : mgi-mind (memory, audit trail, skills, self-learning) on :8765
+#   - dashboard  : the live vitrine + audit/flywheel reports on :8000
+#
+# The dashboard shows a recorded run out of the box (no keys needed). To run the
+# full live orchestra, copy .env.example -> .env, add your Band + LLM + Cloudflare
+# keys, and run `uv run python agents.py` + `uv run python maestro.py "<brief>"`.
+#
+# Default uses the prebuilt brain image (fast pull). To build the brain from
+# source instead:  docker compose --profile build up
+
+services:
+  brain:
+    # prebuilt, multi-arch — the whole brain (binary + Qdrant + ONNX + models)
+    image: madgodinc/mgi-mind:v1.7.0
+    environment:
+      # a stable token so the dashboard and orchestrator can reach the brain
+      MGIMIND_TOKEN: ${MGIMIND_TOKEN_ARCHIVIST:-crescendo_archivist_tok}
+    ports:
+      - "8765:8765"
+    volumes:
+      - brain-data:/data
+    healthcheck:
+      # the slim image has no curl/wget; the mgimind CLI hits the same store, so
+      # `list` exiting 0 means the brain is up and serving.
+      test: ["CMD", "mgimind", "list"]
+      interval: 5s
+      timeout: 8s
+      retries: 40          # cold start loads ~550MB of models — give it room
+      start_period: 30s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    environment:
+      MGIMIND_URL: http://brain:8765
+      MGIMIND_TOKEN_ARCHIVIST: ${MGIMIND_TOKEN_ARCHIVIST:-crescendo_archivist_tok}
+    ports:
+      - "8000:8000"
+    depends_on:
+      brain:
+        condition: service_healthy
+
+volumes:
+  brain-data:

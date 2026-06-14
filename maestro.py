@@ -673,14 +673,18 @@ class Maestro:
         return deploy
 
     def _dump_replay(self, brief: str) -> None:
-        """Write the replay trail for the static (offline) dashboard."""
+        """Write the replay trail for the static (offline) dashboard, both as
+        replay.json (served path) and replay-data.js (a <script> the dashboard
+        loads from file:// — fetch is blocked there, a script tag is not)."""
         import json
-        path = "/home/madgodinc/code/crescendo/dashboard/replay.json"
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"brief": brief, "agents": AGENTS, "timeline": self.events},
-                      f, ensure_ascii=False, indent=2)
-        log("replay", f"wrote {len(self.events)} events -> {path}")
+        ddir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
+        os.makedirs(ddir, exist_ok=True)
+        doc = {"brief": brief, "agents": AGENTS, "timeline": self.events}
+        with open(os.path.join(ddir, "replay.json"), "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+        with open(os.path.join(ddir, "replay-data.js"), "w", encoding="utf-8") as f:
+            f.write("window.CRESCENDO_REPLAY = " + json.dumps(doc, ensure_ascii=False) + ";")
+        log("replay", f"wrote {len(self.events)} events -> dashboard/replay.json")
 
 
 async def main() -> None:

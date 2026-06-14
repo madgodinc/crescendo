@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Crescendo · orchestra of AI agents</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<!-- recorded run embedded as a script so it loads even from file:// (where fetch is blocked) -->
+<script src="replay-data.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -826,7 +828,9 @@ async function boot() {
     // tick the live phase timers every second (smooth count-up while running)
     setInterval(() => { if (curStatus==='running') renderRail(curPhase, 'running'); }, 1000);
   } else {
-    const data = await fetch('replay.json').then(r=>r.json()).catch(()=>null);
+    // offline: prefer the inlined recorded run (works from file://), else fetch.
+    let data = window.CRESCENDO_REPLAY || null;
+    if (!data) data = await fetch('replay.json').then(r=>r.json()).catch(()=>null);
     if (!data) { el('feed').innerHTML='<div class="ev"><div class="txt">No data — run serve.py (live) or maestro.py.</div></div>'; return; }
     loadDoc({ ...data, status:'done', phase:'done' });
     setStatus('offline');

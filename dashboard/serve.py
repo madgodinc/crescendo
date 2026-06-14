@@ -27,10 +27,18 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-load_dotenv("/home/madgodinc/code/crescendo/.env")
+# load .env from the repo root if present (works locally, in Docker, and from a
+# clone) without a hardcoded path; env vars already set always win.
+for _p in (os.path.join(os.path.dirname(__file__), "..", ".env"),
+           "/home/madgodinc/code/crescendo/.env"):
+    if os.path.isfile(_p):
+        load_dotenv(_p)
+        break
 
 MGIMIND_URL = os.environ.get("MGIMIND_URL", "http://127.0.0.1:8765").rstrip("/")
-TOKEN = os.environ["MGIMIND_TOKEN_ARCHIVIST"]
+# token is only needed to reach the brain; in replay/demo mode (no brain) the
+# dashboard still serves the recorded run from replay.json, so don't hard-crash.
+TOKEN = os.environ.get("MGIMIND_TOKEN_ARCHIVIST", "crescendo_archivist_tok")
 DASHBOARD_DIR = os.path.dirname(os.path.abspath(__file__))
 
 LIVE_MARKER = "CRESCENDO_LIVE"
@@ -415,8 +423,11 @@ def main():
     port = 8000
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"[dashboard] http://127.0.0.1:{port}/  (proxying {MGIMIND_URL})", flush=True)
+    # bind loopback locally (safe default); in Docker set HOST=0.0.0.0 so the
+    # published port is reachable from the host.
+    host = os.environ.get("HOST", "127.0.0.1")
+    srv = ThreadingHTTPServer((host, port), Handler)
+    print(f"[dashboard] http://{host}:{port}/  (proxying {MGIMIND_URL})", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
