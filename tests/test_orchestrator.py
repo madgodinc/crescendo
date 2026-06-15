@@ -411,3 +411,53 @@ class TestDeployGate:
         out = asyncio.run(deploy_tools._deploy_site())
         assert not out.startswith("REFUSED")
         assert "pages.dev" in out
+
+
+class TestRenderSSRFBlock:
+    """The render is of attacker-controlled HTML. Every non-file:// request must
+    be blocked so a page can't SSRF into cloud metadata / internal services or
+    exfiltrate over an image beacon at render time."""
+
+    def _has_playwright(self):
+        try:
+            import playwright  # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    def test_external_requests_are_blocked_and_flagged(self, monkeypatch):
+        import asyncio
+        import deploy_tools
+        if not self._has_playwright():
+            import pytest
+            pytest.skip("playwright not installed")
+        os.makedirs(deploy_tools.WORKSPACE, exist_ok=True)
+        html = ("<!doctype html><html><head></head><body><h1>Page</h1><p>"
+                + "plenty of real visible content here padding. " * 4 + "</p>"
+                "<img src='http://169.254.169.254/latest/meta-data/'>"
+                "<script>fetch('http://127.0.0.1:8765/audit')</script>"
+                "</body></html>")
+        with open(os.path.join(deploy_tools.WORKSPACE, "index.html"), "w") as f:
+            f.write(html)
+        r = asyncio.run(deploy_tools._render_check())
+        # the page failed the gate AND the external loads were surfaced as blocked
+        assert r["ok"] is False
+        assert any("blocked" in e and "external resource" in e for e in r["errors"])
+        assert any("169.254.169.254" in e or "127.0.0.1" in e for e in r["errors"])
+
+    def test_inline_only_page_still_passes(self, monkeypatch):
+        import asyncio
+        import deploy_tools
+        if not self._has_playwright():
+            import pytest
+            pytest.skip("playwright not installed")
+        os.makedirs(deploy_tools.WORKSPACE, exist_ok=True)
+        html = ("<!doctype html><html><head><style>body{color:#fff}</style></head>"
+                "<body><h1>Real</h1><p>" + "genuine inline content here. " * 4 + "</p>"
+                "<button id=b>Go</button>"
+                "<script>document.getElementById('b').addEventListener('click',()=>{})</script>"
+                "</body></html>")
+        with open(os.path.join(deploy_tools.WORKSPACE, "index.html"), "w") as f:
+            f.write(html)
+        r = asyncio.run(deploy_tools._render_check())
+        assert r["ok"] is True

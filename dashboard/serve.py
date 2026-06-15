@@ -245,7 +245,10 @@ def render_audit(doc: dict) -> str:
     deploy_url = ""
     for ev in tl:
         u = (ev.get("meta") or {}).get("url")
-        if u:
+        # only http(s) reaches the href: an agent-set meta.url of "javascript:..."
+        # would otherwise be a clickable XSS link in the report (html.escape keeps
+        # the scheme intact, it only neutralises quotes/brackets).
+        if u and str(u).lower().startswith(("http://", "https://")):
             deploy_url = u
     verdict_line = doc.get("review_verdict") or status
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">

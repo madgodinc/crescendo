@@ -319,6 +319,13 @@ function phaseStats(timeline, status) {
 const fmt = ts => ts ? ts.slice(11,19) : '';
 const el = id => document.getElementById(id);
 
+// Escape every agent-controlled string before it goes into innerHTML. The brief,
+// reply text, and actor/kind labels all originate from an LLM (or a tampered
+// store), so a brief like `<img src=x onerror=...>` would otherwise run JS in a
+// viewer's browser. Use esc() for text and a pages.dev allowlist for links.
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
 let timeline = [], rendered = 0, curRunId = null, selectedRun = null, curPhase = 'rider', curStatus = 'idle';
 
 // Fallback unicode glyph (only used if an id has no custom icon).
@@ -762,8 +769,8 @@ function updateNow(actor, kind, status) {
   const col = COLOR[actor] || '#fff';
   box.style.setProperty('--now', col);
   box.innerHTML = `<span class="glyph" style="color:${col}">${GLYPH[actor]||'●'}</span>`+
-    `<span class="who">${LABEL[actor]||actor}</span>`+
-    `<span class="verb">${VERB[kind]||kind}</span>`+
+    `<span class="who">${esc(LABEL[actor]||actor)}</span>`+
+    `<span class="verb">${esc(VERB[kind]||kind)}</span>`+
     `<span class="wave"><i></i><i></i><i></i><i></i></span>`;
   box.classList.add('show');
 }
@@ -776,15 +783,18 @@ function step(animate) {
   const div = document.createElement('div');
   div.className = 'ev ' + e.kind;
   div.style.setProperty('--actor', col);
-  let txt = (e.text || '').replace(/</g,'&lt;');
   // strip routing noise the models echo back: @[[uuid]] mentions and bare
   // @handles (incl. the human's real handle): the actor is already labelled.
-  txt = txt.replace(/@\[\[[^\]]+\]\]/g, '').replace(/@[\w.-]+/g, '').replace(/^\s+/, '');
-  txt = txt.replace(/(https:\/\/[a-z0-9.-]+\.pages\.dev)/i, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  let raw = (e.text || '').replace(/@\[\[[^\]]+\]\]/g, '').replace(/@[\w.-]+/g, '').replace(/^\s+/, '');
+  // escape EVERYTHING first, then re-link only a clean pages.dev URL (the URL is
+  // matched on the raw text but rendered via esc(), so it can't carry markup).
+  let txt = esc(raw);
+  const link = (raw.match(/https:\/\/[a-z0-9.-]+\.pages\.dev[a-z0-9./_-]*/i) || [])[0];
+  if (link) txt = txt.replace(esc(link), `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>`);
   div.innerHTML =
     `<div class="top"><span class="glyph" style="color:${col}">${GLYPH[e.actor]||'●'}</span>`+
-    `<span class="who" style="color:${col}">${LABEL[e.actor]||e.actor}</span>`+
-    `<span class="kind">${e.kind}</span><span class="ts">${fmt(e.ts)}</span></div>`+
+    `<span class="who" style="color:${col}">${esc(LABEL[e.actor]||e.actor)}</span>`+
+    `<span class="kind">${esc(e.kind)}</span><span class="ts">${esc(fmt(e.ts))}</span></div>`+
     `<div class="txt">${txt}</div>`;
   el('feed').prepend(div);
   if (animate !== false && window.gsap) gsap.from(div, { duration:.45, y:-10, opacity:0, ease:'power2.out' });
@@ -794,10 +804,10 @@ function step(animate) {
 }
 
 function showShipped(text) {
-  const url = (text.match(/https:\/\/[a-z0-9.-]+\.pages\.dev/i) || [])[0];
+  const url = (text.match(/https:\/\/[a-z0-9.-]+\.pages\.dev[a-z0-9./_-]*/i) || [])[0];
   const box = el('shipped');
   box.innerHTML = `<div class="badge">✦ SHIPPED</div>` +
-    (url ? `<div class="url"><a href="${url}" target="_blank" rel="noopener">${url}</a></div>` : '');
+    (url ? `<div class="url"><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></div>` : '');
   if (!window.gsap) return;
   gsap.killTweensOf(box);
   gsap.fromTo(box, { opacity:0, y:14, scale:.92 },
@@ -832,7 +842,7 @@ function loadDoc(doc, opts={}) {
   const ab = el('auditBtn');
   if (ab) { if (curRunId) { ab.href = '/audit/' + curRunId; ab.classList.remove('off'); }
             else ab.classList.add('off'); }
-  el('brief').innerHTML = doc.brief ? `<b>Brief:</b> ${doc.brief}` : '';
+  el('brief').innerHTML = doc.brief ? `<b>Brief:</b> ${esc(doc.brief)}` : '';
   setStatus(doc.status, doc.phase);
   renderRail(doc.phase, doc.status);
   if (!opts.keepFeed) resetView();
@@ -850,7 +860,7 @@ async function pollLive() {
   }
   if (selectedRun && selectedRun !== doc.run_id) return;
   if (doc.run_id !== curRunId) { loadDoc(doc); return; }
-  el('brief').innerHTML = doc.brief ? `<b>Brief:</b> ${doc.brief}` : '';
+  el('brief').innerHTML = doc.brief ? `<b>Brief:</b> ${esc(doc.brief)}` : '';
   setStatus(doc.status, doc.phase);
   renderRail(doc.phase, doc.status);
   timeline = doc.timeline || timeline;
@@ -865,7 +875,7 @@ async function refreshRuns() {
     const d=document.createElement('div');
     d.className='run'+(((selectedRun||data.current)===r.run_id)?' sel':'');
     d.title=r.brief||r.run_id;
-    d.innerHTML=`<span class="dot ${r.status}"></span><span class="lbl">${r.brief||r.run_id}</span>`;
+    d.innerHTML=`<span class="dot ${esc(r.status)}"></span><span class="lbl">${esc(r.brief||r.run_id)}</span>`;
     d.onclick=()=>selectRun(r.run_id, r.run_id===data.current);
     box.appendChild(d);
   });

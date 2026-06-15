@@ -258,6 +258,22 @@ async def _render_check(must_contain: str = "") -> dict:
             pg = await b.new_page()
             pg.on("console", lambda m: console_errs.append(m.text) if m.type == "error" else None)
             pg.on("pageerror", lambda e: page_errs.append(str(e)))
+            # SECURITY: the page is attacker-controlled (an LLM wrote it). Block
+            # every non-file:// subresource so a page that does fetch() / <img
+            # src=http://169.254.169.254/...> / <iframe src=http://127.0.0.1:8765>
+            # can't turn this render into an SSRF into cloud metadata or internal
+            # services, or exfiltrate via an image beacon. Only local file://
+            # resources (the page's own CSS/JS) are allowed through.
+            blocked = {"v": []}
+
+            async def _gate(route):
+                url = route.request.url
+                if url.startswith("file://"):
+                    await route.continue_()
+                else:
+                    blocked["v"].append(url)
+                    await route.abort()
+            await pg.route("**/*", _gate)
             # Instrument addEventListener BEFORE any page script runs, so we can
             # tell at runtime which controls actually got a click/submit handler
             # (static inspection can't see listeners, and misses event delegation).
@@ -271,6 +287,10 @@ async def _render_check(must_contain: str = "") -> dict:
     except Exception as e:
         return {"ok": False, "errors": [f"render failed: {e}"], "visible_chars": 0}
     errs = [f"console error: {x}" for x in console_errs[:5]] + [f"JS error: {x}" for x in page_errs[:5]]
+    # a page that tries to reach the network at render time is a defect (and a
+    # blocked SSRF attempt): surface it so it can't ship silently.
+    for u in blocked["v"][:3]:
+        errs.append(f"page tried to load an external resource (blocked): {u[:80]}")
     if len(text) < 30:
         errs.append(f"renders almost blank ({len(text)} visible chars)")
     if must_contain and not present:
