@@ -193,7 +193,7 @@ def render_audit(doc: dict) -> str:
     # deterministic: the URL is in the trail only because deploy_site returned
     # it after its own validation, so trusting its shape here is honest.
     grd = ground_run(doc, verify_url=lambda u: "format-valid")
-    gmark = {"grounded": ('<span class="vb gnd" title="claim backed by a real artifact">grounded</span>'),
+    gmark = {"grounded": ('<span class="vb gnd" title="the claimed artifact is present in the trail (deploy URL checked for form, not re-fetched)">grounded</span>'),
              "broken": ('<span class="vb brk" title="claim references a missing artifact">unbacked</span>'),
              "attested": ""}
     rows, prev = [], "0" * 64
@@ -327,10 +327,11 @@ def render_audit(doc: dict) -> str:
     tamper-<i>evident</i>, not tamper-<i>proof</i>: the orchestrator holds the keys to write on each
     agent's behalf, so the guarantee is against an outside editor, not against a malicious orchestrator.)
     <br><b style="color:var(--ink)">Grounded, not just attested:</b> {grd['grounded']} of {grd['total_claims']}
-    claims that point at an external artifact (a written page, a live deploy URL, a deterministic check
-    result) were verified to actually have one. The chain proves no row was altered; signing proves who
-    wrote it; grounding proves no agent claimed an artifact it never produced. ({grd['attested']} internal
-    decisions carry no external artifact.)
+    claims that point at an external artifact (a written page, a deploy URL, a deterministic check result)
+    resolve to one. This report checks the deploy URL's <i>form</i> (a real Cloudflare Pages address), not a
+    live HTTP fetch, so a deploy here is grounded as well-formed, not re-pinged. The chain orders the rows;
+    signing proves who wrote each (the per-author HMAC); grounding proves no agent named an artifact that
+    isn't present in the trail. ({grd['attested']} internal decisions carry no external artifact.)
   </div>
 </div></body></html>"""
 

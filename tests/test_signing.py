@@ -53,8 +53,25 @@ class TestSign:
         sig = sign_event("soloist", "code", "Built the page", "2026-06-14T12:00:00")
         assert sig and len(sig) == 64   # hex sha256
 
-    def test_no_key_actor_returns_empty(self):
-        assert sign_event("human", "brief", "anything", "2026-06-14T12:00:00") == ""
+    def test_no_token_set_returns_empty(self):
+        # an actor whose key env var is unset has no signature
+        assert sign_event("nobody", "brief", "anything", "2026-06-14T12:00:00") == ""
+
+    def test_human_row_signs_with_orchestrator_key(self, monkeypatch):
+        # human rows (brief, approval) are signed by the orchestrator key so an
+        # injected/forged human row no longer renders as unsigned-but-clean.
+        monkeypatch.setenv("MGIMIND_TOKEN_MAESTRO", "maestro-key")
+        sig = sign_event("human", "approval", "human authorised the deploy", "2026-06-14T12:00:00")
+        assert sig and len(sig) == 64
+        assert verify_event("human", "approval", "human authorised the deploy", "2026-06-14T12:00:00", sig) is True
+        # a forged approval text fails verification
+        assert verify_event("human", "approval", "DIFFERENT approval", "2026-06-14T12:00:00", sig) is False
+
+    def test_human_falls_back_to_archivist_token(self, monkeypatch):
+        monkeypatch.delenv("MGIMIND_TOKEN_MAESTRO", raising=False)
+        monkeypatch.setenv("MGIMIND_TOKEN_ARCHIVIST", "arch-key")
+        sig = sign_event("human", "brief", "build a page", "2026-06-14T12:00:00")
+        assert sig and len(sig) == 64
 
 
 class TestVerify:
@@ -78,8 +95,11 @@ class TestVerify:
         # unsignable rows (human, or pre-signing data) read as attested, not forged
         assert verify_event("soloist", "code", "Built the page", "2026-06-14T12:00:00", "") is None
 
-    def test_no_key_actor_is_none(self):
-        assert verify_event("human", "brief", "x", "t", "anysig") is None
+    def test_no_key_actor_is_none(self, monkeypatch):
+        # an actor with no key at all can't be verified -> None (attested), not forged.
+        # human now resolves to the orchestrator key, so use a truly keyless actor.
+        monkeypatch.delenv("MGIMIND_TOKEN_MAESTRO", raising=False)
+        assert verify_event("nobody", "brief", "x", "t", "anysig") is None
 
     def test_field_boundary_collision_fails(self):
         # a plain concat would let bytes shift across field boundaries with the

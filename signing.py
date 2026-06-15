@@ -34,12 +34,22 @@ _KEY_ENV = {
     "tuningfork": "MGIMIND_TOKEN_TUNING_FORK",
     "stagetech": "MGIMIND_TOKEN_STAGE_TECH",
     "archivist": "MGIMIND_TOKEN_ARCHIVIST",
+    # human rows (the brief, the approval decision) are recorded by the
+    # orchestrator on the human's behalf. Signing them with the orchestrator's
+    # key (falling back to the archivist token, which the maestro already holds)
+    # closes the gap where an injected/edited human row — e.g. a forged deploy
+    # approval — would otherwise carry no signature and render indistinguishable
+    # from a legitimately attested one. It's still orchestrator-attested, not a
+    # real human key, and the report says so.
+    "human": "MGIMIND_TOKEN_MAESTRO",
 }
 
 
 def agent_key(actor: str) -> bytes | None:
     env = _KEY_ENV.get(actor)
     val = os.environ.get(env, "") if env else ""
+    if not val and actor == "human":
+        val = os.environ.get("MGIMIND_TOKEN_ARCHIVIST", "")
     return val.encode("utf-8") if val else None
 
 
