@@ -808,6 +808,24 @@ class Maestro:
         log("say", f"-> human: {text[:70]}")
         return datetime.now(timezone.utc)
 
+    # A human safety gate: DENY must win on any ambiguity, and a negated approval
+    # ("do not approve") must NOT grant. So check denial first, and match approve
+    # word-bounded and only when not negated — never as a bare substring (which
+    # let "disapprove" and "do not approve" through as a grant).
+    _DENY = re.compile(r"\b(deny|denied|reject|rejected|disapprove|no|stop|cancel|abort)\b", re.I)
+    _APPROVE = re.compile(r"\b(approve|approved|authorise|authorize|authorised|authorized|yes|ok|go ahead|ship it)\b", re.I)
+    _NEG_APPROVE = re.compile(r"\b(do\s*n[o']?t|don'?t|never|no)\b[^.]*\bapprov", re.I)
+
+    @classmethod
+    def _human_verdict(cls, body: str):
+        """Return True (approve), False (deny), or None (no clear decision yet).
+        Denial and negated approval both block; only an unnegated approve grants."""
+        if cls._DENY.search(body) or cls._NEG_APPROVE.search(body):
+            return False
+        if cls._APPROVE.search(body):
+            return True
+        return None
+
     async def _wait_human_decision(self, since: datetime) -> bool:
         """Wait for a human APPROVE/DENY in the room. Defaults to granting after
         APPROVAL_TIMEOUT so a recording can't hang forever on an absent human."""
@@ -817,11 +835,9 @@ class Maestro:
                 if (getattr(m, "sender_type", "") == "User"
                         and getattr(m, "created_at", None)
                         and m.created_at > since):
-                    body = (m.content or "").lower()
-                    if "approve" in body:
-                        return True
-                    if "deny" in body or "reject" in body:
-                        return False
+                    verdict = self._human_verdict(m.content or "")
+                    if verdict is not None:
+                        return verdict
             await asyncio.sleep(POLL_INTERVAL)
             waited += POLL_INTERVAL
         log("approval", "no human reply — granting by timeout (recording-safe default)")

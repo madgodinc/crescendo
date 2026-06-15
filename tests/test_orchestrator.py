@@ -177,6 +177,32 @@ class TestRunId:
         assert rid.startswith("run_") and len(rid) == 16  # "run_" + 12 hex
 
 
+# ── human approval gate: DENY must win, negated approval must not grant ───────
+
+class TestHumanVerdict:
+    def test_plain_decisions(self):
+        assert Maestro._human_verdict("APPROVE") is True
+        assert Maestro._human_verdict("DENY") is False
+        assert Maestro._human_verdict("reject") is False
+
+    def test_negated_approval_does_not_grant(self):
+        # the dangerous case: a bare-substring match read "do not approve" as a grant
+        assert Maestro._human_verdict("do not approve") is False
+        assert Maestro._human_verdict("don't approve, deny") is False
+        assert Maestro._human_verdict("disapprove") is False
+
+    def test_deny_wins_on_ambiguity(self):
+        assert Maestro._human_verdict("approve? no, deny this") is False
+
+    def test_no_decision_keeps_waiting(self):
+        assert Maestro._human_verdict("not sure yet") is None
+        assert Maestro._human_verdict("what access does it need?") is None
+
+    def test_affirmatives_grant(self):
+        assert Maestro._human_verdict("yes, go ahead") is True
+        assert Maestro._human_verdict("authorize the deploy") is True
+
+
 # ── resume safety: the page lives in the workspace, not the checkpoint ────────
 
 class TestResumeArtifactGuard:
