@@ -16,7 +16,6 @@ Run: uv run python dashboard/serve.py [--port 8000]
 mgi-mind must be up on MGIMIND_URL; MGIMIND_TOKEN_ARCHIVIST supplies the token.
 """
 
-import hashlib
 import html
 import json
 import os
@@ -29,7 +28,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from ledger import ground_run  # noqa: E402  (grounding pass over the audit trail)
-from signing import verify_event  # noqa: E402  (per-author HMAC verification)
+from signing import verify_event, chain_hash  # noqa: E402  (HMAC verify + chain link)
 
 # load .env from the repo root if present (works locally, in Docker, and from a
 # clone) without a hardcoded path; env vars already set always win.
@@ -208,8 +207,10 @@ def render_audit(doc: dict) -> str:
         meta = ev.get("meta") or {}
         tok = meta.get("tokens") or 0
         total_tok += tok
-        # hash chain: h_i = sha256(h_{i-1} || actor || kind || text || ts)
-        h = hashlib.sha256((prev + actor + kind + text + ts).encode("utf-8")).hexdigest()
+        # hash chain: h_i = sha256(h_{i-1} ‖ actor ‖ kind ‖ text ‖ ts), with the
+        # fields NUL-delimited so a byte-shift across a boundary can't preserve
+        # the hash (same reason the signature delimits).
+        h = chain_hash(prev, actor, kind, text, ts)
         prev = h
         # per-author HMAC: verify the row was signed by the agent that claims it
         sv = verify_event(actor, kind, text, ts, ev.get("sig", ""))
@@ -312,7 +313,7 @@ def render_audit(doc: dict) -> str:
   </div>
   <div class="foot">
     <b style="color:var(--ink)">Integrity (hash chain):</b> each row's hash is
-    <code>SHA-256(previous_hash + agent + action + content + timestamp)</code>.
+    <code>SHA-256(previous_hash ‖ agent ‖ action ‖ content ‖ timestamp)</code>, fields delimited.
     Chain root after the last decision: <code>{prev[:24]}…</code>.
     Editing any past row changes its hash and every hash after it, so a post-hoc edit to the
     published trail is detectable.

@@ -52,6 +52,16 @@ def _message(actor: str, kind: str, text: str, ts: str) -> bytes:
     return "\x00".join((actor, kind, text, ts)).encode("utf-8")
 
 
+def chain_hash(prev: str, actor: str, kind: str, text: str, ts: str) -> str:
+    """One link of the audit hash chain. Uses the SAME NUL-delimited field
+    encoding as the signature: a plain concat (prev+actor+kind+text+ts) has the
+    same boundary-shift collision, so the chain must delimit too or an edit that
+    moves bytes across fields keeps the chain hash intact. prev is fixed-width
+    hex, so it joins safely."""
+    msg = "\x00".join((prev, actor, kind, text, ts)).encode("utf-8")
+    return hashlib.sha256(msg).hexdigest()
+
+
 def sign_event(actor: str, kind: str, text: str, ts: str) -> str:
     """Return the agent's HMAC over its event content, or "" if the actor has no
     key (e.g. the human, or an environment without the tokens). The hash chain

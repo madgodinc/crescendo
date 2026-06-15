@@ -16,7 +16,36 @@ os.environ.setdefault("MGIMIND_TOKEN_CONDUCTOR", "conductor-key")
 os.environ.setdefault("MGIMIND_TOKEN_TUNING_FORK", "tf-key")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from signing import sign_event, verify_event  # noqa: E402
+from signing import sign_event, verify_event, chain_hash  # noqa: E402
+
+
+class TestChainHash:
+    ROOT = "0" * 64
+
+    def test_deterministic(self):
+        a = chain_hash(self.ROOT, "soloist", "code", "XYZ", "t")
+        b = chain_hash(self.ROOT, "soloist", "code", "XYZ", "t")
+        assert a == b and len(a) == 64
+
+    def test_boundary_shift_does_not_collide(self):
+        # the same vulnerability the signature had: a plain concat would let
+        # (kind='code', text='XYZ') and (kind='cod', text='eXYZ') chain equal.
+        a = chain_hash(self.ROOT, "soloist", "code", "XYZ", "t")
+        b = chain_hash(self.ROOT, "soloist", "cod", "eXYZ", "t")
+        assert a != b
+
+    def test_prev_links_the_chain(self):
+        # a different previous hash yields a different link for identical fields
+        h1 = chain_hash(self.ROOT, "soloist", "code", "X", "t")
+        h2 = chain_hash("f" * 64, "soloist", "code", "X", "t")
+        assert h1 != h2
+
+    def test_any_field_change_breaks_it(self):
+        base = chain_hash(self.ROOT, "soloist", "code", "X", "t")
+        assert chain_hash(self.ROOT, "conductor", "code", "X", "t") != base
+        assert chain_hash(self.ROOT, "soloist", "plan", "X", "t") != base
+        assert chain_hash(self.ROOT, "soloist", "code", "Y", "t") != base
+        assert chain_hash(self.ROOT, "soloist", "code", "X", "u") != base
 
 
 class TestSign:
