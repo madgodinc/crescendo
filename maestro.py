@@ -42,6 +42,25 @@ from memory_tools import (
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
+
+def _require_env(*names):
+    """Fail fast with one clear message listing every missing var, instead of a
+    bare KeyError deep in import when someone copies .env.example and misses one."""
+    missing = [n for n in names if not os.environ.get(n)]
+    if missing:
+        raise SystemExit(
+            "Missing required env vars: " + ", ".join(missing) + "\n"
+            "Copy .env.example to .env and fill them in (see the Run it section "
+            "in README.md).")
+
+
+_require_env(
+    "MGIMIND_TOKEN_ARCHIVIST", "MAESTRO_AGENT_ID", "MAESTRO_API_KEY",
+    "MAESTRO_COMMAND_ROOM",
+    "CONDUCTOR_AGENT_ID", "SOLOIST_AGENT_ID", "TUNING_FORK_AGENT_ID",
+    "STAGE_TECH_AGENT_ID", "ARCHIVIST_AGENT_ID",
+)
+
 REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
 REPLY_TIMEOUT = 130      # wait for a reply; covers one LLM call + its fallback (70s+70s), no more

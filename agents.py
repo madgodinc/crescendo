@@ -129,8 +129,11 @@ log = logging.getLogger("agents")
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-FEATHERLESS = (os.environ["FEATHERLESS_BASE_URL"], os.environ["FEATHERLESS_API_KEY"])
-AIMLAPI = (os.environ["AIMLAPI_BASE_URL"], os.environ["AIMLAPI_API_KEY"])
+# Sponsor providers are optional: a clone with only an OpenAI or Gemini key
+# should still run. Read them tolerantly here; the preflight below requires only
+# the keys the selected LLM_TIER actually uses.
+FEATHERLESS = (os.environ.get("FEATHERLESS_BASE_URL", ""), os.environ.get("FEATHERLESS_API_KEY", ""))
+AIMLAPI = (os.environ.get("AIMLAPI_BASE_URL", ""), os.environ.get("AIMLAPI_API_KEY", ""))
 # Optional top-tier provider for the comparison/turbo tier (LLM_TIER=turbo).
 # The sponsor APIs (Featherless / AIMLAPI) remain the default: this is only a
 # benchmark lever to measure the quality/speed delta vs a frontier model.
@@ -193,6 +196,14 @@ elif LLM_TIER == "openai" and _OPENAI_KEY:
     GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI: fast, passes the gate
     DSCHAT = (OPENAI, "gpt-4o")
     FB_QWEN72 = FB_DEEPSEEK = FB_MISTRAL   # sponsor Mistral as the working fallback
+
+# Fail fast with a clear message if the resolved tier has no usable provider key,
+# instead of a confusing 401 mid-run. Every role still needs a working primary.
+if not (_OPENAI_KEY or _GEMINI_KEY or FEATHERLESS[1] or AIMLAPI[1]):
+    raise SystemExit(
+        "No LLM provider key found. Set at least one of OPENAI_API_KEY, "
+        "GEMINI_API_KEY, or the sponsor FEATHERLESS_API_KEY / AIMLAPI_API_KEY in "
+        ".env (see .env.example).")
 
 # role -> (prefix, primary (provider,model), fallback (provider,model), system text)
 ROSTER = {
