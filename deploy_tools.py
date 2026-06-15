@@ -111,6 +111,10 @@ def validate_site() -> list[str]:
         problems.append("large data:base64 blob present (junk favicon/image)")
     if _RUNS.search(html):
         problems.append("abnormal run of identical characters (broken base64)")
+    # leaked-secret and placeholder scan belongs in the ALWAYS-run static gate,
+    # not only on the headless-render path: otherwise a page with a hard-coded
+    # key ships unscanned the moment Playwright is unavailable.
+    problems += _static_block_checks(html, visible)
     return problems
 
 
@@ -203,15 +207,19 @@ _AUDIT_JS = r"""
 
 # 5. leaked-secret patterns: high precision only (curated, not "looks like a key").
 _SECRET_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),          # OpenAI / Anthropic style
-    re.compile(r"ghp_[A-Za-z0-9]{20,}"),         # GitHub PAT
-    re.compile(r"AKIA[0-9A-Z]{16}"),             # AWS access key id
+    # sk- covers classic, plus sk-ant- (Anthropic) and sk-proj- (OpenAI project)
+    # keys — the hyphenated bodies are the CURRENT default formats, so the class
+    # must allow '-' or they slip through.
+    re.compile(r"sk-[A-Za-z0-9\-]{20,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),            # GitHub classic PAT
+    re.compile(r"github_pat_[A-Za-z0-9_]{30,}"),    # GitHub fine-grained PAT
+    re.compile(r"AKIA[0-9A-Z]{16}"),                # AWS access key id
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]{20,}"),
-    re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),      # Google API key
-    re.compile(r"xai-[A-Za-z0-9]{20,}"),         # xAI
-    re.compile(r"hf_[A-Za-z0-9]{20,}"),          # HuggingFace
-    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}"),  # Slack
-    re.compile(r"\b[rs]k_live_[A-Za-z0-9]{20,}"),  # Stripe live key
+    re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),         # Google API key
+    re.compile(r"xai-[A-Za-z0-9]{20,}"),            # xAI
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),             # HuggingFace
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}"),   # Slack
+    re.compile(r"\b[rs]k_live_[A-Za-z0-9]{20,}"),   # Stripe live key
 ]
 # 12. placeholder text left in the visible page: owner's "broken text" pain.
 _PLACEHOLDER = re.compile(r"lorem ipsum|your text here|insert[_ ]|\bTODO\b|\bFIXME\b|placeholder text|xxxxx", re.I)
@@ -269,12 +277,9 @@ async def _render_check(must_contain: str = "") -> dict:
         errs.append(f"expected content '{must_contain}' not found in the page")
     # hard-block defects from the live DOM (the strict acceptance audit)
     errs += audit.get("block", [])
-    # source-level hard blocks: leaked secrets + placeholder text in the page
-    try:
-        with open(index, encoding="utf-8") as f:
-            errs += _static_block_checks(f.read(), text)
-    except OSError:
-        pass
+    # NB: the leaked-secret / placeholder scan is a SOURCE check, run in
+    # validate_site() so it fires even when Playwright is absent. Not duplicated
+    # here, or _check_page would list the same secret twice.
     return {"ok": not errs, "errors": errs, "warnings": audit.get("warn", []),
             "visible_chars": len(text)}
 

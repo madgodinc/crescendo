@@ -832,9 +832,13 @@ class Maestro:
         waited = 0
         while waited < APPROVAL_TIMEOUT:
             for m in await self._room_messages(self.room):
+                # Band messages carry inserted_at, NOT created_at (wait_reply uses
+                # inserted_at too). Reading the wrong field made every human reply
+                # invisible, so the gate always timed out and auto-granted — a
+                # typed DENY was silently ignored.
                 if (getattr(m, "sender_type", "") == "User"
-                        and getattr(m, "created_at", None)
-                        and m.created_at > since):
+                        and getattr(m, "inserted_at", None)
+                        and m.inserted_at > since):
                     verdict = self._human_verdict(m.content or "")
                     if verdict is not None:
                         return verdict

@@ -203,6 +203,45 @@ class TestHumanVerdict:
         assert Maestro._human_verdict("authorize the deploy") is True
 
 
+class TestWaitHumanDecision:
+    """The gate reads Band's inserted_at field. Reading created_at (which Band
+    messages don't have) made every human reply invisible, so a typed DENY was
+    silently ignored and the gate always auto-granted by timeout."""
+
+    class _Msg:
+        def __init__(self, content, inserted_at, sender_type="User"):
+            self.content = content
+            self.inserted_at = inserted_at
+            self.sender_type = sender_type
+            self.id = content
+
+    def _maestro_with_messages(self, msgs):
+        import maestro
+        m = maestro.Maestro.__new__(maestro.Maestro)
+        m.room = "room"
+
+        async def _room_messages(room_id):
+            return msgs
+        m._room_messages = _room_messages
+        return m
+
+    def test_deny_is_read_and_blocks(self):
+        import asyncio
+        from datetime import datetime, timezone
+        since = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        later = datetime(2026, 6, 15, 12, 0, 5, tzinfo=timezone.utc)
+        m = self._maestro_with_messages([self._Msg("DENY", later)])
+        assert asyncio.run(m._wait_human_decision(since)) is False
+
+    def test_approve_is_read_and_grants(self):
+        import asyncio
+        from datetime import datetime, timezone
+        since = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        later = datetime(2026, 6, 15, 12, 0, 5, tzinfo=timezone.utc)
+        m = self._maestro_with_messages([self._Msg("APPROVE", later)])
+        assert asyncio.run(m._wait_human_decision(since)) is True
+
+
 # ── resume safety: the page lives in the workspace, not the checkpoint ────────
 
 class TestResumeArtifactGuard:
@@ -271,6 +310,26 @@ class TestStaticBlockChecks:
         assert deploy_tools._static_block_checks("hf_abcdefghij1234567890abcd", "v")
         assert deploy_tools._static_block_checks("xoxb-1234567890-abcdefABCDEF", "v")
         assert deploy_tools._static_block_checks("sk_live_abcdefghij1234567890ABCD", "v")
+
+    def test_hyphenated_and_fine_grained_keys_block(self):
+        # the CURRENT default key formats use hyphens in the body; the old
+        # [A-Za-z0-9]{20,} class terminated at the first hyphen and missed them
+        assert deploy_tools._static_block_checks("sk-ant-api03-aBcDeFgHiJkLmNoPqRsTuV", "v")
+        assert deploy_tools._static_block_checks("sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ", "v")
+        assert deploy_tools._static_block_checks(
+            "github_pat_11ABCDEF0aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789", "v")
+
+    def test_secret_scan_runs_in_static_gate(self, tmp_path, monkeypatch):
+        # the secret scan must fire in validate_site() (the always-run static
+        # gate), NOT only on the headless-render path — otherwise a key ships
+        # unscanned whenever Playwright is unavailable.
+        monkeypatch.setattr(deploy_tools, "WORKSPACE", str(tmp_path))
+        html = ("<!doctype html><html><head></head><body><h1>Hi</h1><p>"
+                + "real content here. " * 5
+                + "sk-ant-api03-aBcDeFgHiJkLmNoPqRsTuV</p></body></html>")
+        (tmp_path / "index.html").write_text(html)
+        problems = deploy_tools.validate_site()
+        assert any("secret" in p for p in problems)
 
     def test_provider_key_prefixes_do_not_false_positive(self):
         # ordinary words that share a prefix must not trip the patterns
