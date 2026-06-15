@@ -43,6 +43,15 @@ def agent_key(actor: str) -> bytes | None:
     return val.encode("utf-8") if val else None
 
 
+def _message(actor: str, kind: str, text: str, ts: str) -> bytes:
+    """Encode the signed fields unambiguously. A plain concatenation lets an
+    attacker shift bytes across field boundaries and keep the same HMAC
+    (sign('code','XYZ') == sign('cod','eXYZ')), which would let a row be
+    re-attributed without breaking the signature. Join with a NUL, which a
+    UTF-8 trail field never contains, so each field stays distinct."""
+    return "\x00".join((actor, kind, text, ts)).encode("utf-8")
+
+
 def sign_event(actor: str, kind: str, text: str, ts: str) -> str:
     """Return the agent's HMAC over its event content, or "" if the actor has no
     key (e.g. the human, or an environment without the tokens). The hash chain
@@ -50,8 +59,7 @@ def sign_event(actor: str, kind: str, text: str, ts: str) -> str:
     key = agent_key(actor)
     if not key:
         return ""
-    msg = (actor + kind + text + ts).encode("utf-8")
-    return hmac.new(key, msg, hashlib.sha256).hexdigest()
+    return hmac.new(key, _message(actor, kind, text, ts), hashlib.sha256).hexdigest()
 
 
 def verify_event(actor: str, kind: str, text: str, ts: str, sig: str) -> bool | None:

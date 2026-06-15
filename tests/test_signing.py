@@ -51,3 +51,22 @@ class TestVerify:
 
     def test_no_key_actor_is_none(self):
         assert verify_event("human", "brief", "x", "t", "anysig") is None
+
+    def test_field_boundary_collision_fails(self):
+        # a plain concat would let bytes shift across field boundaries with the
+        # same HMAC: sign(kind='code', text='XYZ') == sign(kind='cod', text='eXYZ').
+        # The NUL-delimited encoding must reject that so a row can't be re-split.
+        sig = sign_event("soloist", "code", "XYZ", "2026-06-14T12:00:00")
+        assert verify_event("soloist", "code", "XYZ", "2026-06-14T12:00:00", sig) is True
+        assert verify_event("soloist", "cod", "eXYZ", "2026-06-14T12:00:00", sig) is False
+        # boundary between text and timestamp, too
+        sig2 = sign_event("soloist", "deploy", "done", "T")
+        assert verify_event("soloist", "deploy", "don", "eT", sig2) is False
+        # boundary between actor and kind: a re-split actor isn't a known agent,
+        # so it has no key and can never verify as that signature (None, not a
+        # valid True). Re-splitting INTO a real actor is blocked by the NUL too.
+        sig3 = sign_event("soloist", "code", "x", "t")
+        assert verify_event("soloi", "stcode", "x", "t", sig3) is None
+        # and a real actor with a shifted kind boundary still fails
+        sig4 = sign_event("conductor", "plan", "ab", "t")
+        assert verify_event("conductor", "pla", "nab", "t", sig4) is False
