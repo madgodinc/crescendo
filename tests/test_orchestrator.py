@@ -263,3 +263,66 @@ class TestStaticBlockChecks:
     def test_real_content_is_not_placeholder(self):
         out = deploy_tools._static_block_checks("<h1>Vigor</h1>", "Vigor is a fitness app with a hero")
         assert out == []
+
+
+# ── deploy gate runs the render check, not just static validation ─────────────
+
+class TestDeployGate:
+    """_deploy_site must hard-block on render-time errors (a missing local image,
+    a JS error) so a broken page can't ship just because the LLM reviewer didn't
+    call check_page on the final version. The static validate_site() alone misses
+    these — they only surface in the headless render's console errors."""
+
+    def _write_valid_page(self, body):
+        import deploy_tools
+        os.makedirs(deploy_tools.WORKSPACE, exist_ok=True)
+        path = os.path.join(deploy_tools.WORKSPACE, "index.html")
+        html = ("<!doctype html><html><head></head><body>" + body +
+                "</body></html>")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return path
+
+    def test_render_errors_refuse_deploy(self, monkeypatch):
+        import asyncio
+        import deploy_tools
+        self._write_valid_page("<h1>Mira</h1><p>portfolio with a gallery here</p>")
+
+        async def fake_render(must_contain=""):
+            return {"ok": False, "errors": ["console error: ERR_FILE_NOT_FOUND"],
+                    "warnings": [], "visible_chars": 40}
+
+        monkeypatch.setattr(deploy_tools, "_render_check", fake_render)
+        out = asyncio.run(deploy_tools._deploy_site())
+        assert out.startswith("REFUSED")
+        assert "ERR_FILE_NOT_FOUND" in out
+
+    def test_clean_render_does_not_refuse_on_the_gate(self, monkeypatch):
+        # with no render errors the gate passes; deploy proceeds to wrangler
+        # (which we don't run here — we only assert it didn't REFUSE on the gate).
+        import asyncio
+        import deploy_tools
+        self._write_valid_page("<h1>Mira</h1><p>portfolio with a real gallery</p>")
+
+        async def fake_render(must_contain=""):
+            return {"ok": True, "errors": [], "warnings": [], "visible_chars": 40}
+
+        # pad past validate_site()'s byte/visible floors so only the render gate
+        # is under test here
+        self._write_valid_page(
+            "<h1>Mira</h1><p>" + "A real illustrator portfolio with a gallery. " * 6 + "</p>")
+
+        class _FakeProc:
+            async def communicate(self):
+                return (b"https://abcd1234.example.pages.dev\n", b"")
+
+        async def fake_exec(*a, **k):
+            return _FakeProc()
+
+        monkeypatch.setattr(deploy_tools, "_render_check", fake_render)
+        # reaching wrangler means the gate passed; return a fake URL instead of
+        # actually shelling out, so we assert "not REFUSED" deterministically.
+        monkeypatch.setattr(deploy_tools.asyncio, "create_subprocess_exec", fake_exec)
+        out = asyncio.run(deploy_tools._deploy_site())
+        assert not out.startswith("REFUSED")
+        assert "pages.dev" in out

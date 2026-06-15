@@ -328,7 +328,14 @@ async def _list_files() -> str:
 async def _deploy_site() -> str:
     if not os.path.isdir(WORKSPACE) or not os.listdir(WORKSPACE):
         return "ERROR: nothing to deploy — write files first."
+    # Hard gate: run the SAME deterministic check the reviewer can run, not just
+    # the static validate_site(). The headless render catches console errors a
+    # source scan misses — a missing local image (src="image1.jpg" with no file),
+    # a JS error, mixed content. Otherwise a broken page ships whenever the LLM
+    # reviewer happens not to call check_page on the final version.
     problems = validate_site()
+    render = await _render_check()
+    problems = problems + render.get("errors", [])
     if problems:
         return ("REFUSED: site invalid, NOT deploying. Soloist must rewrite "
                 "index.html to fix: " + "; ".join(problems))
