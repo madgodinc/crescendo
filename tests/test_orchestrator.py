@@ -177,6 +177,33 @@ class TestRunId:
         assert rid.startswith("run_") and len(rid) == 16  # "run_" + 12 hex
 
 
+# ── resume safety: the page lives in the workspace, not the checkpoint ────────
+
+class TestResumeArtifactGuard:
+    """The crash-resume guard rebuilds the page if code-review was checkpointed
+    done but the local artifact has vanished. It hinges on _site_bytes()
+    reporting 0 for a missing/empty file, so lock that invariant."""
+
+    def test_site_bytes_zero_when_missing(self, monkeypatch):
+        import maestro
+        monkeypatch.setattr(maestro, "SITE_PATH", "/nonexistent/crescendo/index.html")
+        assert Maestro._site_bytes() == 0
+
+    def test_site_bytes_zero_when_empty(self, monkeypatch, tmp_path):
+        import maestro
+        f = tmp_path / "index.html"
+        f.write_text("")
+        monkeypatch.setattr(maestro, "SITE_PATH", str(f))
+        assert Maestro._site_bytes() == 0
+
+    def test_site_bytes_positive_when_written(self, monkeypatch, tmp_path):
+        import maestro
+        f = tmp_path / "index.html"
+        f.write_text("<!doctype html><h1>hi</h1>")
+        monkeypatch.setattr(maestro, "SITE_PATH", str(f))
+        assert Maestro._site_bytes() > 0
+
+
 # ── deploy gate sanitizer + validator (junk from weak models must not ship) ───
 
 class TestCleanSlot:

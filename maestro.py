@@ -643,6 +643,14 @@ class Maestro:
 
         # PHASE 2/3: code <-> review negotiation (Archivist feeds design/css/antislop skills)
         self._phase = "code-review"
+        # The page lives in the local workspace, NOT the checkpoint. If a run
+        # resumes after code-review was done but the artifact is gone (fresh
+        # checkout, cleared workspace, relaunched elsewhere), skipping the code
+        # phase would deploy a stale/missing page while the trail claims success.
+        # Re-run code in that case instead of trusting vanished local state.
+        if "code-review" in self._done and self._site_bytes() == 0:
+            log("resume", "code-review was done but the page is gone — rebuilding it")
+            self._done.discard("code-review")
         if self._resumed("code-review"):
             verdict = result.get("review_verdict", "unknown")
         else:
