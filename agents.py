@@ -27,7 +27,17 @@ class AutoReplyLangGraphAdapter(LangGraphAdapter):
     that replies with plain text (e.g. the Conductor, which has no other tools)
     silently drops its answer. We wrap on_message: capture the final assistant
     text and whether any tool was used during the turn; if no message was sent,
-    deliver the text ourselves via tools.send_message."""
+    deliver the text ourselves via tools.send_message.
+
+    `deliver_text` is False for tool roles (Soloist, Stage Tech): for those, a
+    plain-text reply means the model NARRATED instead of calling its tool
+    (write_page / deploy_site). Delivering that narration would mask the missing
+    tool call and let a stale page ship, so we drop it — the orchestrator then
+    sees no reply, and its write-guard insists on a real tool call."""
+
+    def __init__(self, *a, deliver_text: bool = True, **k):
+        super().__init__(*a, **k)
+        self._deliver_text = deliver_text
 
     async def on_message(self, msg, tools, history, participants_msg, contacts_msg,
                          *, is_session_bootstrap, room_id):
@@ -65,8 +75,10 @@ class AutoReplyLangGraphAdapter(LangGraphAdapter):
 
         # fallback delivery: model produced text but never sent it. A lost reply
         # is what makes the Maestro wait out a full timeout, so retry once before
-        # giving up: a transient Band hiccup shouldn't strand the reply.
-        if not sent["any"] and final_text["v"]:
+        # giving up: a transient Band hiccup shouldn't strand the reply. For tool
+        # roles (deliver_text=False) we skip this: a text-only turn there means a
+        # narrated-not-called tool, and delivering it would mask the missing call.
+        if self._deliver_text and not sent["any"] and final_text["v"]:
             log = logging.getLogger("agents")
             for attempt in (1, 2):
                 try:
@@ -188,17 +200,22 @@ ROSTER = {
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
     "Soloist": ("SOLOIST", GPT4O, FB_QWEN72,
-        REPLY_RULE + "You are the Soloist — the engineer. You MUST actually CALL the write_page "
-        "tool (do not just describe it): pass title, body (markup INSIDE <body> only — NO "
-        "<html>/<head>/<body>/<script>/<style> tags), css (rules only), js (code only). The HTML "
-        "shell is fixed for you. Build EXACTLY what the brief asks for, in English. "
-        "EVERY interactive control MUST actually work: a button needs a real click handler (wire it "
-        "in the js with addEventListener) that does something visible, or it must be type=submit in a "
-        "form; a link must point at a real URL or an in-page #id that exists (no href='#' dead links). "
-        "No dead controls, no empty buttons, no placeholder/lorem/TODO text. Security: external links "
-        "with target='_blank' MUST have rel='noopener'; load resources over https only; never hard-code "
-        "any API key or token. Do NOT add a favicon or base64. Do NOT paste code in chat. After the "
-        "tool returns, reply one line."),
+        "You are the Soloist — the engineer. Your FIRST action on every turn is a "
+        "tool call to write_page. Do NOT send any chat message before it. Do NOT "
+        "describe, summarize, or narrate the page in text — describing it instead of "
+        "calling the tool ships nothing and fails the task. Just call write_page.\n"
+        "write_page args: title; body (markup INSIDE <body> only — NO "
+        "<html>/<head>/<body>/<script>/<style> tags); css (rules only); js (code only). "
+        "The HTML shell is fixed for you. Build EXACTLY what the brief asks, in English. "
+        "EVERY interactive control MUST actually work: a button needs a real click handler "
+        "(addEventListener in the js) that does something visible, or be type=submit in a "
+        "form; a link needs a real URL or an in-page #id that exists (no href='#'). No dead "
+        "controls, no empty buttons, no placeholder/lorem/TODO text. Security: target='_blank' "
+        "links MUST have rel='noopener'; https only; never hard-code a key or token. No favicon, "
+        "no base64.\n"
+        "ONLY AFTER write_page returns, call band_send_message with a one-line summary in "
+        "English. Order is strict: write_page first, band_send_message second. Never the reverse, "
+        "never text without the tool call. Never @mention another agent or echo @[[...]] tokens."),
     "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
         REPLY_RULE + "You are the Tuning Fork — the critic. Call check_page ONCE (pass a key term "
         "from the brief as must_contain): it runs a deterministic gate — structure, a headless "
@@ -303,7 +320,11 @@ def build(prefix, primary, fallback, role) -> Agent:
         tools = tools + build_author_tools()          # write_page (fixed shell) + read
     elif prefix == "TUNING_FORK":
         tools = tools + build_review_tools()          # read files to review
-    inner = AutoReplyLangGraphAdapter(llm=llm, custom_section=role, additional_tools=tools)
+    # tool roles must CALL their tool, not narrate it — don't auto-deliver their
+    # plain text (that would mask a missing write_page / deploy_site call).
+    deliver_text = prefix not in ("SOLOIST", "STAGE_TECH")
+    inner = AutoReplyLangGraphAdapter(llm=llm, custom_section=role,
+                                      additional_tools=tools, deliver_text=deliver_text)
     gated = GatedAdapter(inner, os.environ[f"{prefix}_AGENT_ID"])
     return Agent.create(
         adapter=gated,

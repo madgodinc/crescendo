@@ -335,13 +335,20 @@ class Maestro:
                     f"Pass title, body, css, js. Do not describe it — CALL THE TOOL.")
             except TimeoutError:
                 summary = "(no chat reply — checking the file artifact instead)"
-        # fail-fast: after every insist the file still doesn't exist. Don't loop
-        # back into another review round on a Soloist that can't emit a tool call
-        # — that's how a stuck model burns minutes. Stop the run honestly.
-        if self._site_bytes() == 0:
-            raise RuntimeError(
-                f"Soloist did not call write_page after {MAX_WRITE_TRIES} attempts — "
-                f"no page to ship. (The model replied but never emitted the tool call.)")
+        # The write_page tool result can land on disk slightly after the chat
+        # reply (Band routes them on separate paths), so give the file a moment
+        # to appear before declaring failure — otherwise a successful write that
+        # arrives late is falsely failed.
+        for _ in range(6):
+            if self._site_bytes() > 0:
+                return summary
+            await asyncio.sleep(2)
+        # fail-fast: still no file after the grace window. Don't loop back into
+        # another review round on a Soloist that only narrates — that's how a
+        # stuck model burns minutes. Stop the run honestly.
+        raise RuntimeError(
+            f"Soloist did not call write_page after {MAX_WRITE_TRIES} attempts — "
+            f"no page to ship. (The model replied but never emitted the tool call.)")
         return summary
 
     @staticmethod
