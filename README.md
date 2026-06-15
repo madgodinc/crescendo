@@ -16,17 +16,18 @@ Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of
 
 ## Prove every decision
 
-Three independent checks back the claim, and each defends a different thing.
+Three independent checks back the claim: integrity, authorship, and grounding.
 
 **Integrity (hash chain).** The audit report chains every row:
-`SHA-256(previous_hash + agent + action + content + timestamp)`. Edit any past row
-and every hash after it breaks, so a post-hoc edit to the published trail is
-detectable. This is the standard part.
+`SHA-256(previous_hash ‖ agent ‖ action ‖ content ‖ timestamp)`, with the fields
+NUL-delimited so a byte shifted across a field boundary can't preserve the hash.
+Edit any past row and every hash after it breaks, so a post-hoc edit to the
+published trail is detectable. This part is standard practice.
 
 **Authorship (per-author HMAC).** Each row also carries
-`HMAC(agent_key, agent + action + content + timestamp)`, signed with that agent's
-key. A row's author can't be forged without it, so an outside party with store
-access can't rewrite a row under a different author. Stated honestly: this is
+`HMAC(agent_key, agent ‖ action ‖ content ‖ timestamp)` (same NUL-delimited
+fields), signed with that agent's key. A row's author can't be forged without it,
+so an outside party with store access can't rewrite a row under a different author. Stated honestly: this is
 provenance and integrity of the published trail against an outside editor, not a
 zero-trust guarantee against the orchestrator itself, which holds the keys to
 write on each agent's behalf. Tamper-evident, not tamper-proof, and the report
@@ -40,12 +41,12 @@ deterministic and report-only, so it adds no model and can't stall a run.
 
 Per-author provenance is the reason there are five agents and not one tool-calling
 loop: a trail that attributes each decision to a distinct author needs distinct
-authors. The agent count follows from the provability goal, it isn't decoration.
+authors. The agent count follows from the provability goal.
 
 High-stakes briefs add a human in the loop: when the Conductor's resource contract
 says a project needs real external access, the deploy waits for a human sign-off,
 and that approval is recorded in the trail. A benign brief ships with no friction.
-Proportional autonomy, the access granted once and the sign-off provable.
+The access is granted once, and the sign-off is recorded in the trail.
 
 mgi-mind is a Rust service bundled in this repo as a submodule. It runs its own
 store rather than wrapping a hosted vector DB, and it carries the audit chain, the
@@ -125,8 +126,7 @@ through real Band primitives:
 - **A control loop in code** sequences these Band primitives deterministically: it
   decides which agent the Maestro `@mention`s next, reads the reply the
   `AutoReplyLangGraphAdapter` delivered, and bounds the run. Band does the
-  collaboration; the loop conducts it, the way a score conducts an orchestra that
-  is still the one playing.
+  collaboration; the loop only sequences it.
 
 ## Architecture
 
@@ -156,7 +156,7 @@ skills and recalled fixes straight to the worker that needs them.
 
 ## Run it
 
-Pick the path that fits how far you want to go. Crescendo needs its brain
+Pick the path that fits your setup. Crescendo needs its brain
 ([mgi-mind](https://github.com/madgodinc/mgi-mind)) for memory, the audit trail,
 skills, and crash-resume. The brain is bundled here as a submodule, so it comes
 along with a clone.
@@ -195,7 +195,7 @@ docker compose -f docker-compose.yml -f docker-compose.image.yml up
 
 ### 3. Drive the live orchestra (bring your own keys)
 
-The engine is here; the fuel is yours: five [Band](https://band.ai) agents, any
+You bring three things: five [Band](https://band.ai) agents, any
 OpenAI-compatible LLM key (Gemini, OpenAI, Featherless, or AI/ML API via
 `LLM_TIER`), and a Cloudflare account for the deploy. Copy the template and fill
 it in:
@@ -216,7 +216,7 @@ opens the tamper-evident trail of every decision.
 
 ## What's built
 
-- Five agents on Band, each with its own LLM brain, provider-agnostic over any OpenAI-compatible API (we run Gemini and GPT-4o; the Featherless and AI/ML API sponsor keys are wired as a fallback tier)
+- Five agents on Band, each with its own LLM brain, provider-agnostic over any OpenAI-compatible API (default tier runs Gemini 2.5 Flash, or GPT-4o via `LLM_TIER=openai`; the Featherless and AI/ML API sponsor keys are wired as a fallback tier)
 - Star coordination with a control loop in code
 - Shared memory, every write attributed to its agent
 - A resource contract: the Conductor infers the access a brief needs before any work starts
@@ -230,15 +230,15 @@ opens the tamper-evident trail of every decision.
 ## Models
 
 Crescendo is provider-agnostic: every role runs on an OpenAI-compatible endpoint,
-swapped by `LLM_TIER` with no code change. The sponsor credits ($10 of AI/ML API,
-a Featherless plan) ran dry during testing, so the runs here use Gemini 2.5 Flash
-and GPT-4o, with the sponsor APIs kept as a fallback tier.
+selected by `LLM_TIER` with no code change. The default tier runs Gemini 2.5 Flash
+(or GPT-4o with `LLM_TIER=openai`); the sponsor APIs (Featherless, AI/ML API) run
+as a fallback tier and as the `sponsor` tier for a partner-prize run.
 
 The deterministic acceptance gate doubles as a model yardstick: same brief, same
-gate. A frontier model (Gemini 2.5 Flash, GPT-4o) builds a page that passes the
-gate in 8–15s; the sponsor 72B model takes ~65s and the page fails the gate
-(no working JS). That gap is the case for putting a stronger model behind each
-role, measured by an objective check rather than a vibe.
+gate. A frontier model (Gemini 2.5 Flash, GPT-4o) passes the gate in 8–15s. On
+the sponsor path, Featherless Mistral-Small-24B passes too but takes ~65s; the
+larger Qwen2.5-72B is slower again and trips the gate (no working JS). The gate
+gives an objective basis for which model to put behind each role.
 
 ## Example runs
 

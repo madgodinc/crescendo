@@ -82,6 +82,6 @@ to not trip a reply timeout.
 
 Crescendo runs end-to-end on Featherless today using **Mistral-Small-24B**, the
 one model that emits tool calls, fits the concurrency budget, and passes the
-acceptance gate. The frontier models (Gemini, GPT-4o) are faster and the sponsor
-path is the slower, cheaper tier, exactly the trade-off Crescendo is built to
-expose, since the same deterministic gate measures every model the same way.
+acceptance gate. The frontier models (Gemini, GPT-4o) are faster; the sponsor
+path is the slower, cheaper tier. The same deterministic gate measures every
+model, so the trade-off is visible rather than asserted.

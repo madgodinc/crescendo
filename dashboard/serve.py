@@ -318,7 +318,7 @@ def render_audit(doc: dict) -> str:
     Editing any past row changes its hash and every hash after it, so a post-hoc edit to the
     published trail is detectable.
     <br><b style="color:var(--ink)">Authorship ({signed_n}/{len(tl)} signed):</b> each row also carries
-    <code>HMAC(agent_key, agent + action + content + timestamp)</code>. A row's author can't be forged
+    <code>HMAC(agent_key, agent ‖ action ‖ content ‖ timestamp)</code>, fields delimited. A row's author can't be forged
     without that agent's key, so an external party with store access can't rewrite a row under a different
     author. (Threat model, stated plainly: this is integrity + provenance of the published trail. It is
     tamper-<i>evident</i>, not tamper-<i>proof</i>: the orchestrator holds the keys to write on each
