@@ -19,8 +19,29 @@ os.environ.setdefault("MAESTRO_API_KEY", "k")
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from maestro import Maestro, _deploy_error_signature  # noqa: E402
+from maestro import Maestro, _deploy_error_signature, _is_system_echo  # noqa: E402
 import deploy_tools  # noqa: E402
+
+
+# ── a weak model parroting a Band system block must not count as a reply ──────
+
+class TestSystemEcho:
+    def test_real_captured_echo_is_detected(self):
+        echo = ("[[System]: ## Current Participants\n"
+                "- @trolltina1/archivist — Archivist (Agent)\n"
+                "- @trolltina1/soloist — Soloist (Agent)")
+        assert _is_system_echo(echo) is True
+
+    def test_participants_block_only(self):
+        assert _is_system_echo("## Current Participants\n- @a — A\n- @b — B") is True
+
+    def test_real_verdict_is_not_an_echo(self):
+        assert _is_system_echo("CLEAN") is False
+        assert _is_system_echo("ISSUES:\n1. email field does not validate") is False
+
+    def test_prose_mentioning_system_is_not_an_echo(self):
+        # a real review that happens to use the word "system" must pass through
+        assert _is_system_echo("CLEAN. The login system works.") is False
 
 
 # ── review verdict: the headline gate (broken page must not ship as clean) ────
@@ -66,6 +87,18 @@ class TestIsClean:
     def test_truncated_page_still_blocks(self):
         # but a REAL truncation (not negated) must still block
         assert Maestro._is_clean("the file is truncated, does not end with </html>") is False
+
+    def test_cleanup_substring_does_not_ship(self):
+        # "CLEANUP needed" must NOT match the CLEAN positive marker — a substring
+        # match here would silently ship a page the reviewer asked to fix.
+        assert Maestro._is_clean("cleanup needed on the header") is False
+        assert Maestro._is_clean("the cleanliness is fine but spacing is off") is False
+
+    def test_other_signoff_phrasings_are_clean(self):
+        # models sign off without the literal CLEAN; these are positive too
+        assert Maestro._is_clean("Zero issues. Ship it.") is True
+        assert Maestro._is_clean("Approved.") is True
+        assert Maestro._is_clean("Passes review, good to go.") is True
 
 
 class TestCountIssues:

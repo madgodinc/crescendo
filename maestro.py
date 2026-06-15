@@ -120,6 +120,29 @@ def _clean(text: str) -> str:
     return re.sub(r"@\[\[[^\]]+\]\]", "", text or "").strip()
 
 
+# A weak model sometimes parrots a Band system/participants block back as its
+# reply instead of doing the task (verified on a review turn: the Tuning Fork
+# returned "[[System]: ## Current Participants ..." and the review scored garbage).
+# Detect a reply that is *only* that echoed system noise so the loop doesn't
+# treat it as a real verdict.
+_SYSTEM_ECHO = re.compile(
+    r"\[\[?\s*system\s*\]?\]?\s*:?|##\s*current participants|^\s*-\s*@\S+\s+—",
+    re.I)
+
+
+def _is_system_echo(text: str) -> bool:
+    """True if the message is dominated by an echoed Band system block (no real
+    content of the agent's own). Used to discard a junk reply, not to score it."""
+    body = _clean(text)
+    if not _SYSTEM_ECHO.search(body):
+        return False
+    # strip the system lines; if almost nothing of the agent's own is left, it's
+    # an echo. Participant lines start "- @handle — Name".
+    leftover = re.sub(r"(?im)^\s*-\s*@.*$", "", body)
+    leftover = _SYSTEM_ECHO.sub("", leftover).strip()
+    return len(leftover) < 12
+
+
 def _deploy_error_signature(deploy_reply: str) -> str:
     """Reduce a deploy-gate refusal to a stable signature so procedural memory
     recalls the same playbook across runs (the brief and URL differ every time;
@@ -261,8 +284,14 @@ class Maestro:
                 fresh.sort(key=lambda x: x.inserted_at)
                 m = fresh[0]
                 self.seen_ids.add(m.id)
-                log("reply", f"<- {from_key}: {m.content[:80]}")
-                return m.content
+                # a reply that is only an echoed Band system/participants block is
+                # not a real answer; mark it seen and keep waiting so the run
+                # times out (and retries) instead of scoring garbage as a verdict.
+                if _is_system_echo(m.content):
+                    log("reply", f"<- {from_key}: (ignored a system-message echo)")
+                else:
+                    log("reply", f"<- {from_key}: {m.content[:80]}")
+                    return m.content
             if done_check and done_check():
                 log("reply", f"<- {from_key}: (artifact confirmed; chat ACK lost)")
                 return "(work confirmed by artifact)"
@@ -407,6 +436,12 @@ class Maestro:
                           r"(ISSUES?|PROBLEMS?|BUGS?|ERRORS?|CONCERNS?|MISSING|"
                           r"TRUNCAT\w*|BROKEN|INCOMPLETE|FAIL\w*)\b", re.I)
 
+    # Positive markers, word-bounded so "CLEANUP needed" does NOT match CLEAN and
+    # silently ship a page the reviewer asked to fix. "Ship it / approve / pass"
+    # cover the phrasings a model uses to sign off without the literal CLEAN.
+    _POS = re.compile(r"\b(CLEAN|LGTM|LOOKS GOOD|SHIP IT|APPROVED?|"
+                      r"PASSES?|PASSED|GOOD TO GO|ALL GOOD)\b", re.I)
+
     @classmethod
     def _is_clean(cls, review: str) -> bool:
         """A review is clean ONLY on an explicit positive signal AND no negative
@@ -417,7 +452,7 @@ class Maestro:
         up = cls._NEGATED.sub(" ", _clean(review).upper())
         if cls._NEG.search(up):
             return False
-        return "CLEAN" in up or "LOOKS GOOD" in up or "LGTM" in up
+        return bool(cls._POS.search(up))
 
     @staticmethod
     def _count_issues(review: str) -> int:
