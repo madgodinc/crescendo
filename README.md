@@ -21,8 +21,10 @@ Three independent checks back the claim: integrity, authorship, and grounding.
 **Integrity (hash chain).** The audit report chains every row:
 `SHA-256(previous_hash ‖ agent ‖ action ‖ content ‖ timestamp)`, with the fields
 NUL-delimited so a byte shifted across a field boundary can't preserve the hash.
-Edit any past row and every hash after it breaks, so a post-hoc edit to the
-published trail is detectable. This part is standard practice.
+Edit any past row and every hash after it breaks, so against a recorded chain
+root the edit is detectable. The chain orders and links; the per-author HMAC
+below is what makes an agent row's edit fail verification on its own. This part
+is standard practice.
 
 **Authorship (per-author HMAC).** Each row also carries
 `HMAC(agent_key, agent ‖ action ‖ content ‖ timestamp)` (same NUL-delimited

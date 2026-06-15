@@ -315,8 +315,8 @@ def render_audit(doc: dict) -> str:
     <b style="color:var(--ink)">Integrity (hash chain):</b> each row's hash is
     <code>SHA-256(previous_hash ‖ agent ‖ action ‖ content ‖ timestamp)</code>, fields delimited.
     Chain root after the last decision: <code>{prev[:24]}…</code>.
-    Editing any past row changes its hash and every hash after it, so a post-hoc edit to the
-    published trail is detectable.
+    Editing any past row changes its hash and every hash after it, so against a recorded root the
+    edit is detectable; the per-author HMAC below is what makes an agent row's edit fail on its own.
     <br><b style="color:var(--ink)">Authorship ({signed_n}/{len(tl)} signed):</b> each row also carries
     <code>HMAC(agent_key, agent ‖ action ‖ content ‖ timestamp)</code>, fields delimited. A row's author can't be forged
     without that agent's key, so an external party with store access can't rewrite a row under a different
