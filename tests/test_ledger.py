@@ -52,8 +52,10 @@ class TestPageGrounding:
         ev = {"kind": "code", "meta": {}}
         assert ground_event(ev, deploy_live=True)["status"] == "grounded"
 
-    def test_page_without_file_or_deploy_is_broken(self):
-        # CRESCENDO_SITE_PATH points nowhere by default in CI; no deploy either
+    def test_page_without_file_or_deploy_is_broken(self, monkeypatch):
+        # point the site path at a file that can't exist, so the test doesn't
+        # depend on whether a real run left a page in the workspace.
+        monkeypatch.setenv("CRESCENDO_SITE_PATH", "/nonexistent/crescendo/index.html")
         ev = {"kind": "code", "meta": {}}
         assert ground_event(ev, deploy_live=False)["status"] == "broken"
 

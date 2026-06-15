@@ -40,7 +40,7 @@ _ATTESTED_KINDS = {"brief", "rider", "plan", "archive", "recall", "learn", "skil
 _PAGES_URL = re.compile(r"https://[\w.-]+\.pages\.dev\S*")
 SITE_PATH = os.environ.get(
     "CRESCENDO_SITE_PATH",
-    "/home/madgodinc/code/crescendo/workspace/site/index.html",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace", "site", "index.html"),
 )
 
 
@@ -60,8 +60,11 @@ def _default_verify_url(url: str) -> str:
 
 
 def _site_exists() -> bool:
+    # resolve at call time so a test (or a CRESCENDO_SITE_PATH override) takes
+    # effect without re-importing the module.
+    path = os.environ.get("CRESCENDO_SITE_PATH", SITE_PATH)
     try:
-        return os.path.getsize(SITE_PATH) > 0
+        return os.path.getsize(path) > 0
     except OSError:
         return False
 

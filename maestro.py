@@ -40,14 +40,16 @@ from memory_tools import (
     get_token_total,
 )
 
-load_dotenv("/home/madgodinc/code/crescendo/.env")
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 REST = "https://app.band.ai"
 POLL_INTERVAL = 3        # seconds between reply polls
 REPLY_TIMEOUT = 130      # wait for a reply; covers one LLM call + its fallback (70s+70s), no more
 MAX_REVIEW_ROUNDS = 3    # bounded code<->review negotiation
 MAX_WRITE_TRIES = 3      # how many times to insist the Soloist actually call write_page
-SITE_PATH = "/home/madgodinc/code/crescendo/workspace/site/index.html"
+SITE_PATH = os.environ.get(
+    "CRESCENDO_SITE_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace", "site", "index.html"))
 
 # Risk-gated human approval before deploy. A benign brief (the Conductor's
 # resource contract came back empty) ships straight through; a high-stakes one
@@ -435,9 +437,8 @@ class Maestro:
 
     def _read_site(self) -> str:
         """Read the product file the Soloist wrote, so the reviewer sees real code."""
-        path = "/home/madgodinc/code/crescendo/workspace/site/index.html"
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(SITE_PATH, encoding="utf-8") as f:
                 return f.read()
         except FileNotFoundError:
             return "(no file written yet)"

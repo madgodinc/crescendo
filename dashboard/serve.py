@@ -33,11 +33,9 @@ from signing import verify_event  # noqa: E402  (per-author HMAC verification)
 
 # load .env from the repo root if present (works locally, in Docker, and from a
 # clone) without a hardcoded path; env vars already set always win.
-for _p in (os.path.join(os.path.dirname(__file__), "..", ".env"),
-           "/home/madgodinc/code/crescendo/.env"):
-    if os.path.isfile(_p):
-        load_dotenv(_p)
-        break
+_p = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.isfile(_p):
+    load_dotenv(_p)
 
 MGIMIND_URL = os.environ.get("MGIMIND_URL", "http://127.0.0.1:8765").rstrip("/")
 # token is only needed to reach the brain; in replay/demo mode (no brain) the

@@ -12,7 +12,7 @@ import os
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv("/home/madgodinc/code/crescendo/.env")
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
 MGIMIND_URL = os.environ.get("MGIMIND_URL", "http://127.0.0.1:8765")
 TOKEN = os.environ["MGIMIND_TOKEN_CONDUCTOR"]
