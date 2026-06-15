@@ -70,11 +70,18 @@ def _site_exists() -> bool:
 
 
 def ground_event(ev: dict, *, verify_url=_default_verify_url,
-                 deploy_live: bool | None = None) -> dict:
+                 deploy_live: bool | None = None,
+                 allow_local_file: bool = True) -> dict:
     """Classify one audit event. `deploy_live` lets the caller pass the run's
     already-verified deploy state so a page-write claim can be grounded
     transitively (a live deploy proves the page was really written), which is
-    what lets historical runs ground even after the workspace file is gone."""
+    what lets historical runs ground even after the workspace file is gone.
+
+    `allow_local_file` gates the ambient-workspace fallback: a page-write with no
+    deploy grounds on _site_exists() ONLY for a live run, where the local file is
+    authoritative. When grounding a REPLAY (the dashboard), the workspace holds
+    some other run's page, so trusting it would ground a historical claim against
+    an unrelated file — pass False there."""
     kind = ev.get("kind", "")
     meta = ev.get("meta") or {}
 
@@ -103,7 +110,7 @@ def ground_event(ev: dict, *, verify_url=_default_verify_url,
         if deploy_live:
             return {"status": "grounded", "artifact": "page",
                     "detail": "page shipped to the verified live deploy"}
-        if _site_exists():
+        if allow_local_file and _site_exists():
             return {"status": "grounded", "artifact": "page",
                     "detail": "page file present in the workspace"}
         return {"status": "broken", "artifact": "page",
@@ -125,11 +132,16 @@ def ground_event(ev: dict, *, verify_url=_default_verify_url,
     return {"status": "attested", "artifact": None, "detail": "uncategorised"}
 
 
-def ground_run(doc: dict, *, verify_url=_default_verify_url) -> dict:
+def ground_run(doc: dict, *, verify_url=_default_verify_url,
+               allow_local_file: bool = False) -> dict:
     """Ground a whole run. Returns:
         {grounded, broken, attested, total_claims, ratio, all_grounded, events:[...]}
     where total_claims = grounded + broken (the entries that *make* an external
-    claim) and ratio is grounded/total_claims (1.0 when nothing is broken)."""
+    claim) and ratio is grounded/total_claims (1.0 when nothing is broken).
+
+    allow_local_file defaults False: grounding a report/replay must NOT trust the
+    ambient workspace (it holds an unrelated run's page). A live run that owns the
+    workspace passes True."""
     tl = doc.get("timeline", []) or doc.get("events", [])
 
     # first pass: is there a verified live deploy? page-writes ground against it.
@@ -142,7 +154,8 @@ def ground_run(doc: dict, *, verify_url=_default_verify_url) -> dict:
 
     results, grounded, broken, attested = [], 0, 0, 0
     for ev in tl:
-        r = ground_event(ev, verify_url=verify_url, deploy_live=deploy_live)
+        r = ground_event(ev, verify_url=verify_url, deploy_live=deploy_live,
+                         allow_local_file=allow_local_file)
         results.append(r)
         if r["status"] == "grounded":
             grounded += 1

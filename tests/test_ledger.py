@@ -59,6 +59,32 @@ class TestPageGrounding:
         ev = {"kind": "code", "meta": {}}
         assert ground_event(ev, deploy_live=False)["status"] == "broken"
 
+    def test_replay_does_not_ground_page_off_ambient_workspace(self, tmp_path, monkeypatch):
+        # a REPLAY whose deploy failed must not ground its page-write against
+        # whatever page happens to sit in the live workspace right now. ground_run
+        # defaults allow_local_file=False, so the local file is ignored here even
+        # though it exists.
+        real = tmp_path / "index.html"
+        real.write_text("<!doctype html><h1>some other run's page</h1>")
+        monkeypatch.setenv("CRESCENDO_SITE_PATH", str(real))
+        doc = {"timeline": [
+            {"kind": "code", "meta": {}},
+            {"kind": "deploy", "meta": {"failed": True}, "text": "REFUSED"},
+        ]}
+        r = ground_run(doc, verify_url=lambda u: "live")
+        # the page claim is broken (no live deploy, ambient file not trusted)
+        assert r["broken"] >= 1
+        assert r["events"][0]["status"] == "broken"
+
+    def test_live_run_may_trust_its_own_workspace(self, tmp_path, monkeypatch):
+        # the live-run caller opts in: a page write grounds on the real local file
+        real = tmp_path / "index.html"
+        real.write_text("<!doctype html><h1>this run's page</h1>")
+        monkeypatch.setenv("CRESCENDO_SITE_PATH", str(real))
+        ev = {"kind": "code", "meta": {}}
+        assert ground_event(ev, deploy_live=False, allow_local_file=True)["status"] == "grounded"
+        assert ground_event(ev, deploy_live=False, allow_local_file=False)["status"] == "broken"
+
 
 # ── a review grounds on a recorded deterministic check verdict ────────────────
 
