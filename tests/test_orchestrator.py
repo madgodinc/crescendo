@@ -212,6 +212,17 @@ class TestStaticBlockChecks:
         assert deploy_tools._static_block_checks("ghp_abcdefghij1234567890abcd", "v")
         assert deploy_tools._static_block_checks("AKIAIOSFODNN7EXAMPLE", "v")
 
+    def test_provider_keys_block(self):
+        # the project wires several LLM providers; their key formats must block too
+        assert deploy_tools._static_block_checks("xai-abcdefghij1234567890abcd", "v")
+        assert deploy_tools._static_block_checks("hf_abcdefghij1234567890abcd", "v")
+        assert deploy_tools._static_block_checks("xoxb-1234567890-abcdefABCDEF", "v")
+        assert deploy_tools._static_block_checks("sk_live_abcdefghij1234567890ABCD", "v")
+
+    def test_provider_key_prefixes_do_not_false_positive(self):
+        # ordinary words that share a prefix must not trip the patterns
+        assert deploy_tools._static_block_checks("<p>See our skills and hf demos</p>", "skills hf demos") == []
+
     def test_clean_page_has_no_secret_finding(self):
         # ordinary markup with no key-shaped string passes
         assert deploy_tools._static_block_checks("<h1>Ledger</h1><p>Budget app</p>", "Ledger Budget app") == []

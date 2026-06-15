@@ -203,11 +203,15 @@ _AUDIT_JS = r"""
 
 # 5. leaked-secret patterns: high precision only (curated, not "looks like a key").
 _SECRET_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
-    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),          # OpenAI / Anthropic style
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),         # GitHub PAT
+    re.compile(r"AKIA[0-9A-Z]{16}"),             # AWS access key id
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]{20,}"),
-    re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),
+    re.compile(r"AIza[0-9A-Za-z_\-]{30,}"),      # Google API key
+    re.compile(r"xai-[A-Za-z0-9]{20,}"),         # xAI
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),          # HuggingFace
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}"),  # Slack
+    re.compile(r"\b[rs]k_live_[A-Za-z0-9]{20,}"),  # Stripe live key
 ]
 # 12. placeholder text left in the visible page: owner's "broken text" pain.
 _PLACEHOLDER = re.compile(r"lorem ipsum|your text here|insert[_ ]|\bTODO\b|\bFIXME\b|placeholder text|xxxxx", re.I)
