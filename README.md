@@ -1,13 +1,20 @@
 # Crescendo
 
-**An orchestra of AI agents where you can prove every decision.**
+**An orchestra of AI agents that ships only what it can prove works.**
 
 Crescendo takes one brief, plans it, builds it, reviews its own work, fixes the
-bugs it catches, and deploys a working product to a live URL. It writes every
-decision to a SHA-256 hash-chained, per-author-signed audit trail you can open and
-verify: who decided what, in what order, and whether the artifacts they claimed
-actually exist. The claim is precise, provenance and integrity, not "the decision
-was correct": tamper-evident, attributable, and grounded against real artifacts.
+bugs it catches, and deploys a working product to a live URL. The ship is
+conditional: a deterministic gate headless-renders the page and refuses the
+deploy unless every control actually works, and a grounding pass checks that each
+artifact an agent claimed really exists. That proof is then written into a
+per-author-signed, hash-chained audit trail you can open and verify: who decided
+what, in what order, and that the result was machine-checked before it went live.
+
+Plenty of tools deploy a page; plenty sign an agent log. The seam Crescendo owns
+is binding the two: the deploy is gated by a deterministic proof, and that proof
+is signed into the per-author chain. The claim is precise, provenance and
+verification, not "the decision was smart": tamper-evident, attributable, and
+grounded against real artifacts.
 
 Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of-agents-hackathon)
 (June 12–19, 2026).
@@ -76,6 +83,17 @@ live URL, then proves how it got there. It coordinates through
 and shared state, so every step is attributable to a specific author and provable
 after the fact.
 
+The pieces exist elsewhere; the binding is the point. Build-and-ship agents (v0,
+Bolt, Lovable, Devin) deploy a live app but verify by eye, not by a deterministic
+gate that blocks the ship. Signed-audit tools for agents (OpenFang, agentstamp,
+EPI) sign identity or generic action logs, not a build pipeline whose every ship
+is gated by a machine-checkable proof. Orchestration frameworks (LangGraph,
+AutoGen) checkpoint and replay, which is tamper-recoverable, not tamper-evident.
+Crescendo's seam is the one none of them close: the deploy is conditional on a
+deterministic gate plus grounding, and that verification is signed into a
+per-author hash chain. The audit trail records not just what each agent did, but
+that the result was checked to work before it went live.
+
 ## The agents
 
 | Agent | Role |
@@ -129,6 +147,12 @@ through real Band primitives:
   decides which agent the Maestro `@mention`s next, reads the reply the
   `AutoReplyLangGraphAdapter` delivered, and bounds the run. Band does the
   collaboration; the loop only sequences it.
+
+Each Band handoff the loop drives (the mention out, the reply back) is the unit
+the audit trail records and signs. The deterministic conductor doesn't route
+around Band; it conducts Band's primitives and writes each coordination step into
+the chain. So the same thing the judges look for (agents collaborating through
+Band) is the thing the audit trail attests.
 
 ## Architecture
 
