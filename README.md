@@ -83,16 +83,11 @@ live URL, then proves how it got there. It coordinates through
 and shared state, so every step is attributable to a specific author and provable
 after the fact.
 
-The pieces exist elsewhere; the binding is the point. Build-and-ship agents (v0,
-Bolt, Lovable, Devin) deploy a live app but verify by eye, not by a deterministic
-gate that blocks the ship. Signed-audit tools for agents (OpenFang, agentstamp,
-EPI) sign identity or generic action logs, not a build pipeline whose every ship
-is gated by a machine-checkable proof. Orchestration frameworks (LangGraph,
-AutoGen) checkpoint and replay, which is tamper-recoverable, not tamper-evident.
-Crescendo's seam is the one none of them close: the deploy is conditional on a
-deterministic gate plus grounding, and that verification is signed into a
-per-author hash chain. The audit trail records not just what each agent did, but
-that the result was checked to work before it went live.
+The binding is the point. Deploying a live URL is one thing; signing an agent log
+is another; Crescendo makes the deploy conditional on a deterministic gate plus a
+grounding pass, then signs that verification into the per-author hash chain. So
+the audit trail records not just what each agent did, but that the result was
+machine-checked to work before it went live.
 
 ## The agents
 
