@@ -33,6 +33,7 @@ import urllib.request
 _PAGE_KINDS = {"code"}          # the Soloist wrote the page file
 _DEPLOY_KINDS = {"deploy"}      # the Stage Tech shipped a live URL
 _CHECK_KINDS = {"review"}       # the Tuning Fork ran a deterministic check
+_ATTEST_KINDS = {"attest"}      # the live DOM was fetched + hashed into the chain
 # kinds that are internal decisions: real, attributed, hash-chained, but with
 # no external artifact to point at, so they don't count toward the ratio.
 _ATTESTED_KINDS = {"brief", "rider", "plan", "archive", "recall", "learn", "skills", "approval"}
@@ -115,6 +116,23 @@ def ground_event(ev: dict, *, verify_url=_default_verify_url,
                     "detail": "page file present in the workspace"}
         return {"status": "broken", "artifact": "page",
                 "detail": "claimed a page write with no file and no deploy"}
+
+    if kind in _ATTEST_KINDS:
+        # the strongest possible grounding: a real digest of the live DOM plus a
+        # 2xx from the deployed URL. This is the one claim a non-deploying system
+        # physically cannot make — there's no live artifact for it to hash.
+        digest = meta.get("live_dom_sha256") or ""
+        status = meta.get("http_status") or 0
+        if digest and 200 <= status < 400:
+            return {"status": "grounded", "artifact": "attest",
+                    "detail": f"live DOM hashed (sha256 {digest[:12]}…), HTTP {status}"}
+        if digest:
+            return {"status": "broken", "artifact": "attest",
+                    "detail": f"hashed a DOM but the URL returned HTTP {status}"}
+        # network unavailable / playwright absent: the deploy itself still grounds
+        # separately, so don't count a skipped attestation against the ratio.
+        return {"status": "attested", "artifact": None,
+                "detail": meta.get("detail") or "live attestation unavailable"}
 
     if kind in _CHECK_KINDS:
         # the deterministic check_page result is the artifact: a real verdict

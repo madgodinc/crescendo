@@ -232,15 +232,19 @@ def render_audit(doc: dict) -> str:
         rnd = f' · round {meta["round"]}' if meta.get("round") else ""
         tokstr = f'<span class="tok">~{tok} tok</span>' if tok else ""
         gb = gmark.get((grd["events"][i - 1] if i - 1 < len(grd["events"]) else {}).get("status"), "")
+        # data-* carry the exact signed fields so the in-page "Falsify" demo can
+        # recompute the chain client-side and show it break. The content cell is
+        # marked editable; on edit the JS re-hashes from that row forward and reds
+        # out every link that no longer matches the recorded root.
         rows.append(f"""
-        <tr class="ev {e(actor)}">
+        <tr class="ev {e(actor)}" data-actor="{e(actor)}" data-kind="{e(kind)}" data-ts="{e(ts)}" data-hash="{h}">
           <td class="n">{i}</td>
           <td class="who"><span class="dot {e(actor)}"></span>{e(ROLE.get(actor, actor))}</td>
           <td class="ph">{e(PHASE_OF.get(kind, kind))}{rnd}</td>
           <td class="kind">{e(kind)} {badge}{gb}{sigbadge}</td>
-          <td class="content">{e(text)}</td>
+          <td class="content" data-text="{e(text)}">{e(text)}</td>
           <td class="meta">{tokstr}<span class="ts">{e(ts[11:19] if len(ts) > 19 else ts)}</span>
-              <span class="hash" title="chained SHA-256">{h[:12]}…</span></td>
+              <span class="hash" title="chained SHA-256" data-full="{h}">{h[:12]}…</span></td>
         </tr>""")
     deploy_url = ""
     for ev in tl:
@@ -251,8 +255,14 @@ def render_audit(doc: dict) -> str:
         if u and str(u).lower().startswith(("http://", "https://")):
             deploy_url = u
     verdict_line = doc.get("review_verdict") or status
+    # While the run is still going, auto-refresh so the chain visibly grows in
+    # real time (no manual reload). Once it's done/failed we STOP refreshing, so
+    # the Falsify/Restore tamper demo isn't wiped out from under the viewer.
+    live = status not in ("done", "failed")
+    refresh_tag = '<meta http-equiv="refresh" content="3">' if live else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+{refresh_tag}
 <title>Audit report · {e(run_id)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -293,6 +303,21 @@ def render_audit(doc: dict) -> str:
   .foot {{ color:var(--dim); font-size:12px; margin-top:20px; line-height:1.7; }}
   .foot code {{ font-family:'JetBrains Mono',monospace; color:var(--purple); }}
   a.back {{ color:var(--blue); text-decoration:none; font-size:13px; }}
+  .tamperbar {{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:18px 0 6px; }}
+  .tbtn {{ font:600 13px 'Space Grotesk',sans-serif; color:var(--orange);
+    background:rgba(255,154,90,.10); border:1px solid rgba(255,154,90,.45); border-radius:9px;
+    padding:7px 14px; cursor:pointer; transition:.15s; }}
+  .tbtn:hover {{ background:rgba(255,154,90,.20); box-shadow:0 0 14px rgba(255,154,90,.25); }}
+  .tbtn.ghost {{ color:var(--blue); background:rgba(90,168,255,.08); border-color:rgba(90,168,255,.4); }}
+  .tmsg {{ color:var(--dim); font-size:12px; max-width:560px; }}
+  .tmsg b {{ color:var(--orange); }}
+  tr.broken td.meta .hash {{ color:var(--pink); font-weight:600; }}
+  tr.broken {{ background:rgba(255,123,198,.06); }}
+  td.content[contenteditable] {{ outline:1px dashed rgba(255,154,90,.4); border-radius:4px; }}
+  td.content.edited {{ background:rgba(255,154,90,.10); }}
+  .hash.brk {{ color:var(--pink) !important; }}
+  .hash.brk::after {{ content:" ✗"; }}
+  #tamperMsg.alarm {{ color:var(--pink); }} #tamperMsg.alarm b {{ color:var(--pink); }}
 </style></head><body><div class="wrap">
   <a class="back" href="/">← dashboard</a>
   <h1>Audit report · <span class="a">Crescendo</span></h1>
@@ -307,6 +332,13 @@ def render_audit(doc: dict) -> str:
       <div class="kv"><div class="k">Grounded claims</div><div class="v" style="color:{'var(--green)' if grd['all_grounded'] else 'var(--pink)'}">{grd['grounded']}/{grd['total_claims']}{' ✓' if grd['all_grounded'] else ' ⚠'}</div></div>
       <div class="kv"><div class="k">Shipped to</div><div class="v">{'<a href="'+e(deploy_url)+'" target="_blank">'+e(deploy_url)+'</a>' if deploy_url else '—'}</div></div>
     </div>
+  </div>
+  <div class="tamperbar">
+    <button id="falsifyBtn" class="tbtn">⚠ Falsify a record</button>
+    <button id="resetBtn" class="tbtn ghost" style="display:none">↺ Restore</button>
+    <span id="tamperMsg" class="tmsg">Edit any cell in the “decided / produced” column, or hit
+      <b>Falsify</b>, to watch the chain break. The recorded root is fixed; a single changed byte
+      reds out every hash after it.</span>
   </div>
   <div class="card" style="padding:0;overflow:hidden">
     <table>
@@ -333,7 +365,85 @@ def render_audit(doc: dict) -> str:
     signing proves who wrote each (the per-author HMAC); grounding proves no agent named an artifact that
     isn't present in the trail. ({grd['attested']} internal decisions carry no external artifact.)
   </div>
-</div></body></html>"""
+</div>
+<script>
+// In-browser proof of the tamper-evident claim. The recorded hashes came from
+// the server (data-hash). Here we RECOMPUTE the chain client-side with the exact
+// same rule as signing.chain_hash — sha256(prev \\0 actor \\0 kind \\0 text \\0 ts) —
+// so editing any cell visibly breaks every link from that row on. No server call:
+// the math is reproducible by anyone, which is the whole point of an audit.
+const ROOT = "0".repeat(64);
+const rows = Array.from(document.querySelectorAll("tr.ev"));
+
+async function sha256Hex(str) {{
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}}
+
+async function recompute() {{
+  let prev = ROOT, brokenFrom = -1;
+  for (let i = 0; i < rows.length; i++) {{
+    const r = rows[i];
+    const actor = r.dataset.actor, kind = r.dataset.kind, ts = r.dataset.ts;
+    const text = r.querySelector("td.content").innerText;
+    const link = [prev, actor, kind, text, ts].join("\\u0000");
+    const h = await sha256Hex(link);
+    prev = h;
+    const recorded = r.dataset.hash;
+    const hashEl = r.querySelector(".hash");
+    if (h !== recorded) {{
+      if (brokenFrom < 0) brokenFrom = i + 1;
+      r.classList.add("broken");
+      hashEl.classList.add("brk");
+      hashEl.textContent = h.slice(0, 12) + "…";
+    }} else {{
+      r.classList.remove("broken");
+      hashEl.classList.remove("brk");
+      hashEl.textContent = recorded.slice(0, 12) + "…";
+    }}
+  }}
+  const msg = document.getElementById("tamperMsg");
+  if (brokenFrom > 0) {{
+    msg.classList.add("alarm");
+    msg.innerHTML = "<b>Chain broken at row " + brokenFrom + ".</b> Every hash from there on no " +
+      "longer matches the recorded root, so the edit is detectable. You just re-ran that math " +
+      "yourself; nothing here trusts our word.";
+    document.getElementById("resetBtn").style.display = "";
+  }} else {{
+    msg.classList.remove("alarm");
+    msg.innerHTML = "Chain intact — every recomputed hash matches the recorded root.";
+    document.getElementById("resetBtn").style.display = "none";
+  }}
+}}
+
+// make the content cells editable; recompute live as the judge types
+document.querySelectorAll("td.content").forEach(td => {{
+  td.setAttribute("contenteditable", "true");
+  td.addEventListener("input", () => {{
+    td.classList.toggle("edited", td.innerText !== td.dataset.text);
+    recompute();
+  }});
+}});
+
+document.getElementById("falsifyBtn").addEventListener("click", () => {{
+  // pick a meaty row (the deploy or a review) and silently flip one word, the way
+  // a tamperer would — then let recompute() expose it.
+  const target = rows.find(r => ["deploy", "review", "attest"].includes(r.dataset.kind)) || rows[Math.floor(rows.length / 2)];
+  const td = target.querySelector("td.content");
+  td.innerText = td.innerText.replace(/\\b(\\w+)\\b/, "TAMPERED");
+  td.classList.add("edited");
+  recompute();
+}});
+
+document.getElementById("resetBtn").addEventListener("click", () => {{
+  document.querySelectorAll("td.content").forEach(td => {{
+    td.innerText = td.dataset.text;
+    td.classList.remove("edited");
+  }});
+  recompute();
+}});
+</script>
+</body></html>"""
 
 
 def render_flywheel(active: dict) -> str:

@@ -143,13 +143,22 @@ OPENAI = (os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), _OPENA
 _GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI = (os.environ.get("GEMINI_BASE_URL",
           "https://generativelanguage.googleapis.com/v1beta/openai"), _GEMINI_KEY)
+# DeepSeek direct API (OpenAI-compatible). Verified 2026-06-16 to EMIT tool_calls
+# (not narrate them), so it's safe in a tool role — unlike most Featherless models.
+# A separate provider with its own rate limit, so it's a real cross-provider
+# fallback for an OpenAI 429 (where falling back to gpt-4o again is a no-op).
+_DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK = (os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"), _DEEPSEEK_KEY)
 # Default tier: OpenAI (reliable, no daily cap) if its key is set, else Gemini,
 # else the sponsor path. Gemini's free tier is 20 requests/day/model, enough for
 # a demo but it runs dry under repeated testing: use LLM_TIER=gemini when the
 # daily quota is fresh. Override with LLM_TIER=sponsor|gemini.
+# Default tier: hybrid (tool roles on OpenAI, Conductor on free Featherless) when
+# an OpenAI key is present — it's the demo default and keeps a sponsor model in
+# the loop. Falls back to gemini, then Featherless-only sponsor, by available key.
 LLM_TIER = os.environ.get(
     "LLM_TIER",
-    "openai" if _OPENAI_KEY else ("gemini" if _GEMINI_KEY else "sponsor")).strip().lower()
+    "hybrid" if _OPENAI_KEY else ("gemini" if _GEMINI_KEY else "sponsor")).strip().lower()
 
 # Every role is told to use band_send_message to reply: the LangGraph adapter
 # does NOT auto-send text to chat, so the agent must call the tool explicitly.
@@ -174,28 +183,82 @@ REPLY_RULE = (
 # 2026-06-14 PM: Featherless began rate-limiting hard (429 storms stalling runs);
 # AIMLAPI recovered. Flip primary->AIMLAPI (gpt-4o is a reliable tool-caller),
 # Featherless->fallback. Both providers are wired so whichever is healthy wins.
-# Sponsor models (Featherless). Mistral-Small-24B emits tool calls AND passes the
-# acceptance gate (Qwen2.5-72B is slower and fails it); it's the sponsor primary.
+# Sponsor models (Featherless). Live re-probe 2026-06-16: of the three, ONLY
+# DeepSeek-V3.1 actually emits tool calls (write_page/read_file/deploy_site all
+# fire) — Mistral-Small-24B and Qwen2.5-72B narrate the call as text and return
+# zero tool_calls even with tool_choice="required", so a Soloist on them ships
+# nothing. So tool-using roles run on DeepSeek; Mistral stays as a text fallback
+# and for the Conductor (plan text, no tools), where it's faster.
 FB_MISTRAL = (FEATHERLESS, "mistralai/Mistral-Small-24B-Instruct-2501")
-FB_QWEN72 = (FEATHERLESS, "Qwen/Qwen2.5-72B-Instruct")
 FB_DEEPSEEK = (FEATHERLESS, "deepseek-ai/DeepSeek-V3.1")
-GPT4O = FB_MISTRAL                       # default sponsor primary (AIMLAPI ran out of funds)
+# GPT4O = the spec used by every TOOL role (Soloist/Tuning Fork/Stage Tech/
+# Archivist); DSCHAT = the Conductor (plan text, no tools). Defaults below are
+# overridden per LLM_TIER.
+GPT4O = FB_DEEPSEEK
 DSCHAT = FB_MISTRAL
+FB_TOOL_FALLBACK = FB_DEEPSEEK
 
-# The sponsor credits ran out mid-testing ($10 of AIMLAPI burned through; the
-# Featherless plan caps a 72B model at one concurrent request and stalls), so the
-# default tier runs the roles on a frontier model. LLM_TIER picks the provider:
-# "gemini" (default if a key is set), "openai", or "sponsor" to force the
-# Featherless-only path (Mistral-Small-24B) for the partner-prize run.
+# Provider reality (re-probed live 2026-06-16):
+#  - Featherless TOOL CALLS: only DeepSeek-V3.1 emits them; Mistral-24B & Qwen-72B
+#    narrate instead (0 tool_calls even with tool_choice=required).
+#  - BUT Featherless cuts the chunked stream at a ~60s proxy timeout, so a full
+#    DeepSeek write_page generation dies mid-stream (reproduced 3/3 at ~61s) and
+#    the Soloist comes back "silent". So NO Featherless model can carry a tool
+#    role that emits a full page. Featherless is fine only for SHORT text replies
+#    (the Conductor's plan), which finish inside the 60s window.
+#  - OpenAI gpt-4o is a reliable tool-caller; the key is Tier-1 (30k TPM/500 RPM),
+#    so it 429s only on parallel bursts — the star topology serializes maestro's
+#    calls, so one role at a time stays under the cap.
+# LLM_TIER: "hybrid" (tool roles->OpenAI, Conductor->Featherless Mistral; the
+# default for the partner-prize demo — keeps a free sponsor model in the loop),
+# "openai" (everything on gpt-4o), "gemini", or "sponsor" (Featherless-only;
+# KNOWN-BROKEN for tool roles, kept only for diagnostics).
 if LLM_TIER == "gemini" and _GEMINI_KEY:
     GEM = (GEMINI, "gemini-2.5-flash")  # fast, passes the gate (thinking off)
     OAI = (OPENAI, "gpt-4o") if _OPENAI_KEY else FB_MISTRAL
     GPT4O = DSCHAT = GEM
-    FB_QWEN72 = FB_DEEPSEEK = OAI       # OpenAI as the cross-provider fallback
+    FB_DEEPSEEK = OAI                  # OpenAI as the cross-provider fallback
+    FB_TOOL_FALLBACK = OAI             # tool roles fall back to OpenAI (a real tool-caller)
 elif LLM_TIER == "openai" and _OPENAI_KEY:
     GPT4O = (OPENAI, "gpt-4o")          # direct OpenAI: fast, passes the gate
     DSCHAT = (OPENAI, "gpt-4o")
-    FB_QWEN72 = FB_DEEPSEEK = FB_MISTRAL   # sponsor Mistral as the working fallback
+    FB_DEEPSEEK = FB_MISTRAL               # sponsor Mistral as the working fallback
+    FB_TOOL_FALLBACK = FB_DEEPSEEK         # tool roles fall back to DeepSeek (sponsor tool-caller)
+elif LLM_TIER == "deepseek" and _DEEPSEEK_KEY:
+    # Everything on DeepSeek-direct (verified tool-caller). Used to log a run on
+    # DeepSeek for the cross-provider comparison stat. Falls back to OpenAI if set.
+    GPT4O = (DEEPSEEK, "deepseek-chat")
+    DSCHAT = (DEEPSEEK, "deepseek-chat")
+    FB_TOOL_FALLBACK = (OPENAI, "gpt-4o") if _OPENAI_KEY else (DEEPSEEK, "deepseek-chat")
+elif LLM_TIER == "hybrid" and _OPENAI_KEY:
+    GPT4O = (OPENAI, "gpt-4o")             # tool roles on OpenAI (only reliable tool-caller)
+    DSCHAT = FB_MISTRAL                    # Conductor's plan stays on free Featherless (short reply)
+    # Tool-role fallback must be a DIFFERENT provider, else a 429 just retries the
+    # same OpenAI org under the same 30k TPM cap (a heavy review turn bursts over
+    # it). Prefer DeepSeek-direct: a separate provider with its own limit, paid
+    # balance, and verified tool_calls. Gemini next (free, also OpenAI-compatible,
+    # but a 20 req/day cap dries up under testing). Last resort gpt-4o (no-op vs
+    # rate-limit, but covers a transient non-429 OpenAI error).
+    if _DEEPSEEK_KEY:
+        FB_TOOL_FALLBACK = (DEEPSEEK, "deepseek-chat")
+    elif _GEMINI_KEY:
+        FB_TOOL_FALLBACK = (GEMINI, "gemini-2.5-flash")
+    else:
+        FB_TOOL_FALLBACK = (OPENAI, "gpt-4o")
+
+# Deploy is the one tool call that MUST land: it fires wrangler and is the whole
+# point (the live URL). Verified 2026-06-16: deepseek-chat reliably emits tool
+# calls for short replies but goes quiet on the heavy deploy turn in the live Band
+# loop (3/5 phases, then silent at deploy). So pin Stage Tech to the most reliable
+# tool-caller available regardless of tier — gpt-4o if its key is set, else Gemini,
+# else whatever the tier picked. Its fallback stays the tier default. This keeps a
+# cheap-model run (LLM_TIER=deepseek) end-to-end instead of stalling at deploy.
+if _OPENAI_KEY:
+    DEPLOY_MODEL = (OPENAI, "gpt-4o")
+elif _GEMINI_KEY:
+    DEPLOY_MODEL = (GEMINI, "gemini-2.5-flash")
+else:
+    DEPLOY_MODEL = GPT4O
 
 # Fail fast with a clear message if the resolved tier has no usable provider key,
 # instead of a confusing 401 mid-run. Every role still needs a working primary.
@@ -210,7 +273,7 @@ ROSTER = {
     "Conductor": ("CONDUCTOR", DSCHAT, FB_DEEPSEEK,
         REPLY_RULE + "You are the Conductor — you turn a brief into a short build plan. "
         "Reply with the plan only. NEVER @mention other agents — Maestro routes the work."),
-    "Soloist": ("SOLOIST", GPT4O, FB_QWEN72,
+    "Soloist": ("SOLOIST", GPT4O, FB_TOOL_FALLBACK,
         "You are the Soloist — the engineer. Your FIRST action on every turn is a "
         "tool call to write_page. Do NOT send any chat message before it. Do NOT "
         "describe, summarize, or narrate the page in text — describing it instead of "
@@ -227,19 +290,23 @@ ROSTER = {
         "ONLY AFTER write_page returns, call band_send_message with a one-line summary in "
         "English. Order is strict: write_page first, band_send_message second. Never the reverse, "
         "never text without the tool call. Never @mention another agent or echo @[[...]] tokens."),
-    "Tuning Fork": ("TUNING_FORK", GPT4O, FB_QWEN72,
+    "Tuning Fork": ("TUNING_FORK", GPT4O, FB_TOOL_FALLBACK,
         REPLY_RULE + "You are the Tuning Fork — the critic. Call check_page ONCE (pass a key term "
         "from the brief as must_contain): it runs a deterministic gate — structure, a headless "
         "render reporting console/JS errors, dead controls, secrets, placeholder text. That gate is "
         "your source of truth. If it reports CHECK FAILED, list those as ISSUES. If it PASSED, the "
         "page is structurally sound — do a quick correctness pass against the brief (you may read_file "
         "index.html ONCE if needed, but don't over-inspect) and flag only a real, concrete defect. "
-        "Reply 'CLEAN' if the gate passed and the brief is met, else 'ISSUES: ...' with concrete "
-        "fixes. Be decisive and brief — one check, one short verdict. Write in English."),
-    "Stage Tech": ("STAGE_TECH", GPT4O, FB_QWEN72,
+        "Every ISSUE you raise MUST cite its evidence so the verdict is verifiable, not opinion: "
+        "either quote the check_page line that flagged it (e.g. \"check_page: dead control\") or cite "
+        "the exact offending snippet/line from index.html. No citation, no ISSUE — a claim you can't "
+        "ground, you drop. Reply 'CLEAN' if the gate passed and the brief is met, else "
+        "'ISSUES: ...' where each issue is 'defect [evidence] -> fix'. Be decisive and brief — one "
+        "check, one short verdict. Write in English."),
+    "Stage Tech": ("STAGE_TECH", DEPLOY_MODEL, FB_TOOL_FALLBACK,
         REPLY_RULE + "You are the Stage Tech — the deployer. CALL deploy_site and reply with "
         "the exact live URL it returns. Never invent a URL."),
-    "Archivist": ("ARCHIVIST", GPT4O, FB_QWEN72,
+    "Archivist": ("ARCHIVIST", GPT4O, FB_TOOL_FALLBACK,
         REPLY_RULE + "You are the Archivist — memory. CALL remember to store what you're told, "
         "recall to fetch context, and reply with a one-line confirmation or summary in English."),
 }

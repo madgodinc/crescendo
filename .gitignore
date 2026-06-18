@@ -32,3 +32,11 @@ replay/*.json
 # private planning docs (not for the public repo)
 CRESCENDO.md
 CRESCENDO-CONCEPT.md
+
+# local artifacts (do not publish)
+.env.*
+.qdrant-initialized
+demo-video/
+record_demo.py
+record_live.py
+workspace/.mgimind/

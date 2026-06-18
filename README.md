@@ -1,20 +1,27 @@
 # Crescendo
 
-**An orchestra of AI agents that ships only what it can prove works.**
+**An orchestra of AI agents that ships a working product to a live URL, proves what it shipped, and gets better at it each run.**
 
 Crescendo takes one brief, plans it, builds it, reviews its own work, fixes the
-bugs it catches, and deploys a working product to a live URL. The ship is
-conditional: a deterministic gate headless-renders the page and refuses the
-deploy unless every control actually works, and a grounding pass checks that each
-artifact an agent claimed really exists. That proof is then written into a
-per-author-signed, hash-chained audit trail you can open and verify: who decided
-what, in what order, and that the result was machine-checked before it went live.
+bugs it catches, and deploys a working product to a live URL a judge can click.
+Most agent systems stop at a document: a plan, a review, a pull request, an
+advisory verdict. Crescendo stops at a running artifact behind a public address.
 
-Plenty of tools deploy a page; plenty sign an agent log. The seam Crescendo owns
-is binding the two: the deploy is gated by a deterministic proof, and that proof
-is signed into the per-author chain. The claim is precise, provenance and
-verification, not "the decision was smart": tamper-evident, attributable, and
-grounded against real artifacts.
+The ship is conditional. A deterministic gate headless-renders the page and
+refuses the deploy unless every control works. After the deploy lands, Crescendo
+fetches that live URL back and hashes the DOM a browser receives into the audit
+chain, so the last link records the artifact the judge sees. Any system can hash
+what its agents said; only one that ships has a live artifact to hash.
+
+Crescendo writes that proof into a per-author-signed, hash-chained trail you open
+and verify: who decided what, in what order, and that the result passed the
+machine check before it went live. The audit report lets you edit any row in the
+browser and watch the chain break from that point on, so you re-run the
+tamper-evidence yourself instead of taking it on faith.
+
+The orchestra also carries memory between runs. The Archivist pulls skills and
+fixes it learned on past briefs into each new one, so the work compounds instead
+of starting from zero every time.
 
 Built for the [Band of Agents Hackathon](https://lablab.ai/ai-hackathons/band-of-agents-hackathon)
 (June 12–19, 2026).

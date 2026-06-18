@@ -16,12 +16,15 @@ import hashlib
 import os
 
 from signing import sign_event
+from deploy_tools import attest_live_url
 import re
 import sys
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
+from band import Agent
+from band.core import SimpleAdapter
 from band.client.rest import AsyncRestClient
 from thenvoi_rest.types.chat_room_request import ChatRoomRequest
 from thenvoi_rest.types.chat_message_request import ChatMessageRequest
@@ -79,6 +82,10 @@ SITE_PATH = os.environ.get(
 #   human          : post the request and wait for a human APPROVE in the room
 #                     (used for the recorded demo, so a real keystroke shows).
 #   off            : no gate at all.
+# Where the dashboard is reachable from the human's browser, so the final Band
+# report can hand back clickable links to the live graph and the audit report.
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://127.0.0.1:8000").rstrip("/")
+
 DEPLOY_APPROVAL = os.environ.get("DEPLOY_APPROVAL", "auto").strip().lower()
 APPROVAL_TIMEOUT = 180   # in human mode, fall back to auto-grant after this
 
@@ -161,6 +168,7 @@ class Maestro:
     def __init__(self):
         self.rc = AsyncRestClient(api_key=os.environ["MAESTRO_API_KEY"], base_url=REST)
         self.room = None
+        self._sdk_send = None   # ws send tool, set by MaestroAdapter on a brief
         self.seen_ids: set[str] = set()
         self.events: list[dict] = []   # replay trail for the dashboard
         # crash-proof-resume state (set per run in run())
@@ -239,23 +247,60 @@ class Maestro:
         for m in await self._all_messages():
             if m.sender_id == uuid:
                 self.seen_ids.add(m.id)
-        await self.rc.agent_api_messages.create_agent_chat_message(
-            self.room,
-            message=ChatMessageRequest(
-                content=f"@{handle.split('/')[-1]} {text}",
-                mentions=[Mention(id=uuid, handle=handle)],
-            ),
-        )
+        await self._band_call(
+            "create_message",
+            lambda: self.rc.agent_api_messages.create_agent_chat_message(
+                self.room,
+                message=ChatMessageRequest(
+                    content=f"@{handle.split('/')[-1]} {text}",
+                    mentions=[Mention(id=uuid, handle=handle)],
+                ),
+            ))
         sent_at = datetime.now(timezone.utc)
         log("say", f"-> {to_key}: {text[:70]}")
         return sent_at
+
+    @staticmethod
+    async def _band_call(what: str, coro_factory):
+        """Run a Band REST call, retrying transient failures with backoff.
+
+        Band's REST surface throws sporadic 5xx (observed: 500 Internal Server
+        Error mid-run, Cloudflare-fronted) even when the request is valid and the
+        next identical call succeeds — a single throw used to crash the whole run.
+        Retry on 5xx / 429 / 403 / network errors; other 4xx (wrong id/params) is a
+        contract bug and is re-raised immediately, never masked. 403 is included
+        because Band returns it TRANSIENTLY right after an agent joins a fresh room
+        (post permissions propagate a few seconds late) — verified: the same post
+        that 403s then succeeds on retry. `coro_factory` returns a fresh awaitable
+        per attempt."""
+        # retryable 4xx: rate-limit and the transient post-permission 403
+        RETRYABLE_4XX = {403, 429}
+        attempts = 8
+        delay = 0.8
+        last_exc = None
+        for i in range(attempts):
+            try:
+                return await coro_factory()
+            except Exception as e:  # noqa: BLE001 — Band SDK ApiError or transport
+                code = getattr(e, "status_code", None)
+                if isinstance(code, int) and 400 <= code < 500 and code not in RETRYABLE_4XX:
+                    raise
+                last_exc = e
+                if i < attempts - 1:
+                    log("warn", f"Band {what} {code or type(e).__name__} "
+                                f"(retry {i + 1}/{attempts - 1})")
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 8.0)
+        raise last_exc
 
     async def _all_messages(self) -> list:
         """Fetch every message in the room across all pages."""
         out, page = [], 1
         while True:
-            lst = await self.rc.agent_api_messages.list_agent_messages(
-                self.room, status="all", page=page, page_size=100)
+            lst = await self._band_call(
+                "list_messages",
+                lambda: self.rc.agent_api_messages.list_agent_messages(
+                    self.room, status="all", page=page, page_size=100))
             data = getattr(lst, "data", None) or []
             out.extend(data)
             meta = getattr(lst, "metadata", None)
@@ -500,8 +545,10 @@ class Maestro:
     async def _room_messages(self, room_id: str) -> list:
         out, page = [], 1
         while True:
-            lst = await self.rc.agent_api_messages.list_agent_messages(
-                room_id, status="all", page=page, page_size=100)
+            lst = await self._band_call(
+                "list_messages",
+                lambda: self.rc.agent_api_messages.list_agent_messages(
+                    room_id, status="all", page=page, page_size=100))
             data = getattr(lst, "data", None) or []
             out.extend(data)
             meta = getattr(lst, "metadata", None)
@@ -511,61 +558,161 @@ class Maestro:
             page += 1
         return out
 
-    async def listen_command_room(self, command_room: str) -> None:
-        """Watch the command room; for each human brief, run a project and report back."""
-        # Mark everything already there as seen, so we only react to NEW briefs.
-        seen = {m.id for m in await self._room_messages(command_room)}
-        log("ready", f"listening on command room {command_room} — drop a brief there")
+    async def _post(self, room: str, content: str, mentions):
+        """Post one message to a room, best-effort. Band REST 403s a post whose
+        content does NOT begin with the @handle of its mention (that's the only
+        difference from the working say(): "@conductor <text>"). So we prepend the
+        mention's @handle to the content. A failure must NOT crash the run."""
+        # Band wants the message body to lead with @handle matching the mention.
+        if mentions:
+            handle = getattr(mentions[0], "handle", "") or ""
+            short = handle.split("/")[-1] if handle else ""
+            if short and not content.lstrip().startswith(f"@{short}"):
+                content = f"@{short} {content}"
+        try:
+            await self._band_call(
+                "create_message",
+                lambda: self.rc.agent_api_messages.create_agent_chat_message(
+                    room, message=ChatMessageRequest(content=content, mentions=mentions)))
+            return True
+        except Exception as e:
+            code = getattr(e, "status_code", None)
+            log("warn", f"post to room failed ({code or type(e).__name__}) — continuing")
+            return False
+
+    async def _post_until_delivered(self, room: str, content: str, mentions,
+                                    total_seconds: int = 150, gap: float = 4.0):
+        """Keep trying to post a message until Band accepts it. Band's REST returns
+        403 on posting in WAVES (the same call succeeds seconds later); a one-shot
+        post can land in a bad wave and silently drop. This loops in the background
+        so the message (e.g. the dashboard links the human is waiting for) reliably
+        appears, without blocking the orchestration that runs in parallel."""
+        waited = 0.0
+        while waited < total_seconds:
+            if await self._post(room, content, mentions):
+                return True
+            await asyncio.sleep(gap)
+            waited += gap
+        log("warn", "gave up delivering a chat message after retries")
+        return False
+
+    async def _handle_brief(self, room: str, brief: str, human_mention=None) -> None:
+        """Run one brief end-to-end in `room` and report back, with the dashboard
+        link posted FIRST so the human can watch the whole run live."""
+        log("brief", f"got: {brief[:80]}")
+        run_key = self._run_id(brief)
+        # Band rejects a post whose only mention is the human (403); a message must
+        # mention an agent. Address the report to the Conductor — it's still visible
+        # to everyone in the room, which is all the human needs to read the links.
+        c_uuid, c_handle = WORKERS["conductor"]
+        report_mention = [Mention(id=c_uuid, handle=c_handle)]
+        # FIRST message: the live dashboard, posted before any work starts, so the
+        # human opens it and watches the orchestra from the very first step. Fire it
+        # in the BACKGROUND and keep retrying through Band's 403 waves — so it lands
+        # in the chat without holding up the run.
+        asyncio.create_task(self._post_until_delivered(
+            room,
+            f"🎼 Brief received — building now. Watch it live:"
+            f"\n📊 Dashboard: {DASHBOARD_URL}/"
+            f"\n🔒 Audit report (fills in as it runs): {DASHBOARD_URL}/audit/{run_key}",
+            report_mention))
+        try:
+            result = await self.run(brief, room=room)
+            rider = result.get("rider") or []
+            rider_line = ("\n🎫 Access needed: "
+                          + ", ".join(r["name"] for r in rider)) if rider else ""
+            verdict = result.get("review_verdict", "")
+            review_line = (f"\n⚠ Shipped with open issues ({verdict})"
+                           if verdict.startswith("shipped-with") else "")
+            links = (f"\n📊 Dashboard: {DASHBOARD_URL}/"
+                     f"\n🔒 Audit report: {DASHBOARD_URL}/audit/{self._run_key or run_key}")
+            await self._post_until_delivered(
+                room,
+                f"✅ Done: {result.get('deploy', '')}{rider_line}{review_line}{links}",
+                report_mention)
+        except Exception as e:
+            if self._run_key:
+                await self._push_live("failed", self._phase)
+                await update_active(ARCHIVIST_TOKEN, self._run_key, brief,
+                                    "failed", datetime.now(timezone.utc).isoformat())
+            if isinstance(e, TimeoutError):
+                note = (f"⚠️ A model went quiet at the '{self._phase}' phase. "
+                        f"The finished phases are checkpointed — send the same "
+                        f"brief again and the run resumes from here, no rework.")
+            else:
+                note = f"⚠️ Failed: {type(e).__name__}: {e}"
+            await self._post(room, note, report_mention)
+            log("error", f"{type(e).__name__}: {e}")
+
+    async def listen_all_rooms(self) -> None:
+        """Watch EVERY room the Maestro is a participant of. Create a Band chat,
+        add the agents (Maestro included), drop a brief — it just works. No room
+        id in config, no restart: a room added after startup is picked up on the
+        next poll. Per room we ignore pre-existing messages, then react to each new
+        User brief."""
+        seen_by_room: dict[str, set] = {}
+        known_rooms: set[str] = set()
+        log("ready", "listening on ALL rooms the Maestro is in — create a chat, add the agents, drop a brief")
         while True:
-            for m in await self._room_messages(command_room):
-                if m.id in seen:
-                    continue
-                seen.add(m.id)
-                if m.sender_type == "User" and (m.content or "").strip():
-                    # strip the @[[uuid]] mention Band forces on every message
-                    brief = re.sub(r"@\[\[[^\]]+\]\]", "", m.content).strip()
-                    if not brief:
-                        continue
-                    log("brief", f"got: {brief[:80]}")
-                    # Band requires >=1 mention and forbids mentioning self; tag the
-                    # human who sent the brief so the report lands as a reply to them.
-                    self_m = [Mention(id=m.sender_id, handle=getattr(m, "sender_name", None) or "user")]
+            # discover rooms (cheap; tolerate a transient Band failure)
+            try:
+                chats = await self._band_call(
+                    "list_chats",
+                    lambda: self.rc.agent_api_chats.list_agent_chats(page=1, page_size=100))
+                rooms = [getattr(c, "id", None) for c in (getattr(chats, "data", None) or [])]
+                rooms = [r for r in rooms if r]
+            except Exception as e:
+                log("warn", f"room discovery failed: {type(e).__name__}")
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+
+            for room in rooms:
+                if room not in known_rooms:
+                    known_rooms.add(room)
+                    # On first sight, baseline the history so we don't replay old
+                    # runs — BUT if the room's last message is a User brief that was
+                    # never answered (no agent reply after it), leave it unseen so a
+                    # brief dropped while the Maestro was down still gets picked up.
                     try:
-                        result = await self.run(brief, room=command_room)
-                        rider = result.get("rider") or []
-                        rider_line = ("\n🎫 Access needed: "
-                                      + ", ".join(r["name"] for r in rider)) if rider else ""
-                        verdict = result.get("review_verdict", "")
-                        review_line = (f"\n⚠ Shipped with open issues ({verdict})"
-                                       if verdict.startswith("shipped-with") else "")
-                        await self.rc.agent_api_messages.create_agent_chat_message(
-                            command_room,
-                            message=ChatMessageRequest(
-                                content=f"✅ Done: {result.get('deploy', '')}{rider_line}{review_line}",
-                                mentions=self_m))
-                    except Exception as e:
-                        # surface the failure on the dashboard (not frozen on "running")
-                        if self._run_key:
-                            await self._push_live("failed", self._phase)
-                            await update_active(ARCHIVIST_TOKEN, self._run_key, brief,
-                                                "failed", datetime.now(timezone.utc).isoformat())
-                        # A provider going silent is recoverable: the phases that
-                        # finished are checkpointed, so re-sending the same brief
-                        # resumes from where it died. Say so, instead of reading as
-                        # a dead end.
-                        if isinstance(e, TimeoutError):
-                            note = (f"⚠️ A model went quiet at the '{self._phase}' phase. "
-                                    f"The finished phases are checkpointed — send the same "
-                                    f"brief again and the run resumes from here, no rework.")
-                        else:
-                            note = f"⚠️ Failed: {type(e).__name__}: {e}"
-                        await self.rc.agent_api_messages.create_agent_chat_message(
-                            command_room,
-                            message=ChatMessageRequest(content=note, mentions=self_m))
-                        log("error", f"{type(e).__name__}: {e}")
-                    # after a run, ignore everything up to now so we wait for the NEXT brief
-                    seen = {x.id for x in await self._room_messages(command_room)}
+                        msgs = await self._room_messages(room)
+                        baseline = {x.id for x in msgs}
+                        if msgs:
+                            last = msgs[-1]
+                            if getattr(last, "sender_type", "") == "User" and (last.content or "").strip():
+                                baseline.discard(last.id)   # let this brief run
+                        seen_by_room[room] = baseline
+                        log("room", f"now watching {room}")
+                    except Exception:
+                        seen_by_room[room] = set()
+                    continue  # don't react to the rest of the history on first sight
+
+                seen = seen_by_room.setdefault(room, set())
+                try:
+                    msgs = await self._room_messages(room)
+                except Exception:
+                    continue
+                for m in msgs:
+                    if m.id in seen:
+                        continue
+                    seen.add(m.id)
+                    if m.sender_type == "User" and (m.content or "").strip():
+                        brief = re.sub(r"@\[\[[^\]]+\]\]", "", m.content).strip()
+                        if not brief:
+                            continue
+                        human_mention = [Mention(id=m.sender_id,
+                                                 handle=getattr(m, "sender_name", None) or "user")]
+                        await self._handle_brief(room, brief, human_mention)
+                        # after a run, re-baseline this room so we wait for the NEXT brief
+                        try:
+                            seen_by_room[room] = {x.id for x in await self._room_messages(room)}
+                        except Exception:
+                            pass
             await asyncio.sleep(POLL_INTERVAL)
+
+    # Back-compat: single-room entry still works if a room id is given.
+    async def listen_command_room(self, command_room: str) -> None:
+        self.room = command_room
+        await self.listen_all_rooms()
 
     async def run(self, brief: str, room: str = "") -> dict:
         # Everything runs in ONE chat (the command room): no per-project rooms.
@@ -729,11 +876,34 @@ class Maestro:
                 raise RuntimeError(f"deploy failed: {_clean(deploy)[:160]}")
             result["deploy"] = deploy
             url = _clean(deploy)
+            # Pull the BARE url out: a model may wrap it in markdown
+            # "[https://x.pages.dev](https://x.pages.dev)." — splitting on spaces
+            # then keeps the brackets/trailing dot and breaks the live fetch. Match
+            # the URL itself so attest gets a clean, fetchable string.
+            _m = re.search(r"https://[\w.-]+\.pages\.dev[^\s)\]]*", url)
+            live_url = _m.group(0).rstrip(".") if _m else ""
             self.record("stagetech", "deploy", url,
-                        {"url": next((w for w in url.split() if "pages.dev" in w), ""),
+                        {"url": live_url,
                          "tokens": await self._tok_delta("stagetech", deploy)})
             self._done.add("deploy")
             await self._save("deploy")
+            # ANCHOR THE CHAIN TO EXTERNAL REALITY: fetch the page from the live
+            # URL a judge would click and hash its normalized DOM into the chain.
+            # Every other audit hashes what its agents *said*; this last link hashes
+            # what the world actually serves — and only a system that really deploys
+            # has a live artifact to hash. Best-effort: a fetch failure is recorded
+            # honestly (status 0, empty digest), never raised, so it can't fail a run
+            # or add variance to the pipeline.
+            if live_url:
+                att = await attest_live_url(live_url)
+                self.record("stagetech", "attest",
+                            f"live DOM sha256={att.get('live_dom_sha256') or 'unavailable'} "
+                            f"@ {att['url']} (HTTP {att['http_status']})",
+                            {"url": att["url"],
+                             "http_status": att["http_status"],
+                             "live_dom_sha256": att.get("live_dom_sha256", ""),
+                             "detail": att.get("detail", "")})
+                await self._save("deploy")
             await self._push_live("running", "archive")
 
         # PHASE 5: archive
@@ -803,8 +973,10 @@ class Maestro:
     async def say_human(self, text: str) -> datetime:
         """Post a plain message to the room addressed to the human and return the
         send time, so we can read their reply as anything that arrives after it."""
-        await self.rc.agent_api_messages.create_agent_chat_message(
-            self.room, message=ChatMessageRequest(content=text))
+        await self._band_call(
+            "create_message",
+            lambda: self.rc.agent_api_messages.create_agent_chat_message(
+                self.room, message=ChatMessageRequest(content=text)))
         log("say", f"-> human: {text[:70]}")
         return datetime.now(timezone.utc)
 
@@ -915,6 +1087,69 @@ class Maestro:
         log("replay", f"wrote {len(self.events)} events -> dashboard/replay.json")
 
 
+class MaestroAdapter(SimpleAdapter):
+    """Maestro as a real Band SDK agent: it connects over the websocket like every
+    other agent (so it shows online/green and Band delivers messages to it), but it
+    is NOT an LLM — on a human brief it runs the deterministic orchestration. One
+    run at a time; a brief arriving mid-run is ignored with a note."""
+
+    def __init__(self, maestro: "Maestro"):
+        super().__init__()
+        self.m = maestro
+        self._busy = False
+
+    async def on_message(self, *a, **k):
+        # Required abstract method; all real work is driven from on_event so we can
+        # read sender_type/room off the raw AgentInput. Nothing to do here.
+        return None
+
+    async def on_event(self, inp) -> None:
+        msg = getattr(inp, "msg", None)
+        if msg is None:
+            return
+        sender_type = getattr(msg, "sender_type", "")
+        content = (getattr(msg, "content", "") or "").strip()
+        if sender_type != "User" or not content:
+            return
+        brief = re.sub(r"@\[\[[^\]]+\]\]", "", content).strip()
+        if not brief:
+            return
+        room_id = getattr(inp, "room_id", None) or getattr(msg, "chat_id", None) or self.m.room
+        human_mention = [Mention(id=getattr(msg, "sender_id", ""),
+                                 handle=getattr(msg, "sender_name", None) or "user")]
+        # Hand the live ws-session send tool to the Maestro: posting through the
+        # SDK's send_message (warm websocket presence) avoids the REST 403 waves.
+        self.m._sdk_send = getattr(inp, "tools", None)
+        if self._busy:
+            await self.m._post(room_id, "⏳ Still finishing the current build — "
+                                        "send the next brief when it's done.", human_mention)
+            return
+        self._busy = True
+        try:
+            await self.m._handle_brief(room_id, brief, human_mention)
+        finally:
+            self._busy = False
+
+
+async def run_maestro_agent() -> None:
+    """Service mode: Maestro joins Band over the websocket (green/online) and runs
+    a brief whenever a human drops one in any room it's a participant of."""
+    m = Maestro()
+    agent = Agent.create(
+        adapter=MaestroAdapter(m),
+        agent_id=os.environ["MAESTRO_AGENT_ID"],
+        api_key=os.environ["MAESTRO_API_KEY"],
+        ws_url=os.environ["BAND_WS_URL"],
+        rest_url=os.environ["BAND_REST_URL"],
+    )
+    await agent.start()
+    log("ready", "Maestro online in Band — drop a brief in any room it's in")
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await agent.stop()
+
+
 async def main() -> None:
     m = Maestro()
     command_room = os.environ.get("MAESTRO_COMMAND_ROOM", "").strip()
@@ -939,11 +1174,9 @@ async def main() -> None:
             print(f"{k}: {str(v)[:120]}")
         return
 
-    # Service mode: listen on the command room and handle every brief dropped there.
-    if not command_room:
-        log("error", "set MAESTRO_COMMAND_ROOM in .env, or pass a brief as an argument")
-        return
-    await m.listen_command_room(command_room)
+    # Service mode: Maestro joins Band as a real SDK agent (websocket, shows
+    # online), and Band delivers each human brief to it — no room id, no polling.
+    await run_maestro_agent()
 
 
 if __name__ == "__main__":
